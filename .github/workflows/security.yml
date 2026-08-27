@@ -239,21 +239,6 @@ jobs:
           sarif_file: trivy-config.sarif
           category: trivy-config
 
-      # The scan above writes SARIF and prints nothing, so a
-      # misconfiguration reaches the Security tab without ever being
-      # named in the log. Anyone reading the run then sees a red "Trivy"
-      # check with no way to tell what it found. This repeats the scan as
-      # a table purely so the log says it out loud. exit-code stays 0:
-      # the blocking gate is the next step, this one only reports.
-      - name: Show the configuration findings in the log
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: config
-          scan-ref: .
-          format: table
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-
       # This is the gate that actually blocks. It needs no repository
       # setting, so it works on any fork or private clone.
       - name: Fail on a critical finding
@@ -265,6 +250,63 @@ jobs:
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+      # The configuration scan writes SARIF and prints nothing, so a
+      # misconfiguration reaches the Security tab -- and turns the "Trivy"
+      # check red -- without ever being named in the log. Anyone reading
+      # the run then sees a red check and no way to tell what it found.
+      #
+      # This reads the SARIF back and prints one line per finding. It is
+      # the LAST step on purpose: the finding is then the last thing in a
+      # very long job log, which is where someone diagnosing the check
+      # will actually look. if: always() so a failing gate above still
+      # leaves the explanation behind.
+      - name: Name the configuration findings
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import pathlib
+
+          path = pathlib.Path("trivy-config.sarif")
+          if not path.is_file():
+              print("no trivy-config.sarif: the configuration scan did not run")
+              raise SystemExit(0)
+
+          report = json.loads(path.read_text())
+          rules = {}
+          for run in report.get("runs", []):
+              for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+                  rules[rule.get("id")] = rule
+
+          rows = []
+          for run in report.get("runs", []):
+              for result in run.get("results", []):
+                  rule_id = result.get("ruleId", "?")
+                  rule = rules.get(rule_id, {})
+                  # Trivy carries the real severity here; SARIF `level`
+                  # collapses everything above "note" into "error".
+                  severity = (
+                      rule.get("properties", {}).get("security-severity")
+                      or rule.get("defaultConfiguration", {}).get("level")
+                      or "?"
+                  )
+                  for location in result.get("locations", [{}]):
+                      phys = location.get("physicalLocation", {})
+                      uri = phys.get("artifactLocation", {}).get("uri", "?")
+                      line = phys.get("region", {}).get("startLine", "?")
+                      rows.append((rule_id, severity, f"{uri}:{line}",
+                                   result.get("message", {}).get("text", "")))
+
+          if not rows:
+              print("configuration scan: no findings at CRITICAL or HIGH")
+              raise SystemExit(0)
+
+          print(f"configuration scan: {len(rows)} finding(s)")
+          for rule_id, severity, where, message in rows:
+              print(f"  {rule_id}  severity={severity}  {where}")
+              print(f"      {message.splitlines()[0] if message else ''}")
+          PYTHON
 
   containers:
     name: Container images
