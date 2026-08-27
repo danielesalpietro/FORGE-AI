@@ -1,0 +1,16 @@
+---
+# =====================================================================
+# FORGE-AI :: per-host overrides for poc-windows-01
+# =====================================================================
+
+# Windows features to install after the baseline. Empty by default: a
+# PoC target with no role installed boots faster and drifts less.
+forge_windows_features: []
+
+# The drift runbook adds a firewall rule by hand on this host and the
+# drift report has to catch it.
+forge_drift_demo_rule: FORGE-AI-Drift-Demo
+
+# Windows Setup on a 4 vCPU / 8 GB guest with virtio storage typically
+# completes in 12-25 minutes. Give it headroom before declaring failure.
+forge_wait_install_timeout: 4200

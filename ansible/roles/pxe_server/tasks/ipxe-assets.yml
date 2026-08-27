@@ -1,0 +1,92 @@
+---
+# =====================================================================
+# iPXE first-stage binaries
+# =====================================================================
+# Only the small first-stage binaries travel over TFTP. Everything
+# large -- kernels, initrds, WIMs, ISOs -- moves over HTTP, because
+# TFTP's lock-step acknowledgement makes multi-megabyte transfers
+# painfully slow and fragile across a bridge.
+# =====================================================================
+
+- name: Look for the iPXE binaries shipped by the distribution
+  ansible.builtin.stat:
+    path: "{{ item.src }}"
+  become: true
+  loop:
+    - { src: /usr/lib/ipxe/undionly.kpxe, dest: "{{ ipxe_bios_binary }}" }
+    - { src: /usr/lib/ipxe/ipxe.efi, dest: "{{ ipxe_efi_binary }}" }
+    - { src: /usr/lib/ipxe/ipxe32.efi, dest: "{{ ipxe_efi32_binary }}" }
+    - { src: /usr/lib/ipxe/qemu/ipxe-eth0.rom, dest: ipxe-eth0.rom }
+  loop_control:
+    label: "{{ item.src }}"
+  register: forge_ipxe_sources
+  tags: [provisioning, media]
+
+- name: Fail when no iPXE binary is available
+  ansible.builtin.fail:
+    msg: |
+      No iPXE binary found under /usr/lib/ipxe.
+
+      Install the packages:
+        sudo apt-get install -y ipxe ipxe-qemu
+
+      Or build pinned binaries from source:
+        ./scripts/download-ipxe-assets.sh --build --ref {{ pxe.ipxe.build_ref }}
+
+      Without a first-stage binary, a firmware PXE ROM has nothing to chainload
+      and every client stops at "PXE-E53: no boot filename received".
+  when: forge_ipxe_sources.results | selectattr('stat.exists') | list | length == 0
+  tags: [provisioning, media]
+
+- name: Copy the iPXE binaries into the TFTP root
+  ansible.builtin.copy:
+    src: "{{ item.item.src }}"
+    dest: "{{ storage.tftp_root }}/{{ item.item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_ipxe_sources.results }}"
+  loop_control:
+    label: "{{ item.item.dest }}"
+  when: item.stat.exists
+  tags: [provisioning, media]
+
+- name: Publish the iPXE binaries over HTTP as well
+  # UEFI HTTP Boot (DHCP client-arch 16) fetches the binary over HTTP,
+  # not TFTP, so the same file has to be reachable both ways.
+  ansible.builtin.copy:
+    src: "{{ item.item.src }}"
+    dest: "{{ storage.http_root }}/ipxe/{{ item.item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_ipxe_sources.results }}"
+  loop_control:
+    label: "{{ item.item.dest }}"
+  when: item.stat.exists
+  tags: [provisioning, media]
+
+- name: Record the checksums of the boot binaries
+  ansible.builtin.shell:
+    cmd: "sha256sum {{ ipxe_bios_binary }} {{ ipxe_efi_binary }} 2>/dev/null > checksums.sha256 || true"
+    chdir: "{{ storage.tftp_root }}"
+  become: true
+  changed_when: true
+  tags: [provisioning, media]
+
+- name: Read the recorded checksums
+  ansible.builtin.slurp:
+    src: "{{ storage.tftp_root }}/checksums.sha256"
+  become: true
+  register: forge_ipxe_checksums
+  failed_when: false
+  tags: [provisioning, media, validation]
+
+- name: Show the boot binary checksums
+  ansible.builtin.debug:
+    msg: "{{ (forge_ipxe_checksums.content | default('') | b64decode).split('\n') | select | list }}"
+  tags: [provisioning, media, validation]

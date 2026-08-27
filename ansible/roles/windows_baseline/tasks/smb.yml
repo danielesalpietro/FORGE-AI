@@ -1,0 +1,64 @@
+---
+# =====================================================================
+# SMB hardening
+# =====================================================================
+# SMBv1 is disabled on the *server* side. Note the asymmetry with the
+# provisioning path: WinPE mounted an SMB share to reach install.wim,
+# but that was the client side of a connection to a Samba server
+# configured with `server min protocol = SMB2_10`. Nothing in this PoC
+# needs SMBv1 in either direction.
+# =====================================================================
+
+- name: Disable the SMBv1 server protocol
+  ansible.windows.win_shell: |
+    $config = Get-SmbServerConfiguration
+    if ($config.EnableSMB1Protocol) {
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+      Write-Output 'changed'
+    } else {
+      Write-Output 'unchanged'
+    }
+  register: forge_smb1_server
+  changed_when: forge_smb1_server.stdout is search('changed')
+  check_mode: false
+  tags: [windows, security]
+
+- name: Remove the SMBv1 client feature
+  ansible.windows.win_optional_feature:
+    name: SMB1Protocol
+    state: absent
+  register: forge_smb1_feature
+  notify: "{{ 'reboot windows' if forge_smb1_feature.reboot_required | default(false) else omit }}"
+  failed_when: false
+  tags: [windows, security]
+
+- name: Require SMB signing on the server
+  ansible.windows.win_shell: |
+    $config = Get-SmbServerConfiguration
+    if (-not $config.RequireSecuritySignature) {
+      Set-SmbServerConfiguration -RequireSecuritySignature $true -Force
+      Write-Output 'changed'
+    } else {
+      Write-Output 'unchanged'
+    }
+  register: forge_smb_signing
+  changed_when: forge_smb_signing.stdout is search('changed')
+  check_mode: false
+  tags: [windows, security]
+
+- name: Verify SMBv1 is off
+  ansible.windows.win_shell: "(Get-SmbServerConfiguration).EnableSMB1Protocol"
+  register: forge_smb1_check
+  changed_when: false
+  check_mode: false
+  tags: [windows, security, validation]
+
+- name: Assert SMBv1 is disabled
+  ansible.builtin.assert:
+    that:
+      - forge_smb1_check.stdout | trim | lower == 'false'
+    fail_msg: >-
+      SMBv1 is still enabled on {{ inventory_hostname }}. Inspect with:
+      Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol
+    success_msg: "SMBv1 disabled"
+  tags: [windows, security, validation]

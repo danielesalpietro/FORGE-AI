@@ -12,7 +12,7 @@
 # Semaphore Key Store. See docs/SECURITY.md.
 # =====================================================================
 
-environment:
+deployment:
   # Short identifier, used as a prefix for libvirt objects and reports.
   name: poc
   # Internal DNS domain served by dnsmasq on the provisioning network.

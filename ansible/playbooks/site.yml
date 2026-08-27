@@ -1,0 +1,97 @@
+---
+# =====================================================================
+# The whole lifecycle, in order.
+# =====================================================================
+#   make deploy
+#   ansible-playbook playbooks/site.yml
+#
+# Every stage is also a standalone playbook, so a failure can be
+# resumed from the stage that failed rather than from the beginning.
+#
+# The Windows stages end cleanly when no Windows media is configured --
+# an Ubuntu-only run is a supported outcome, not a failure.
+# =====================================================================
+
+- name: Record when the deployment started
+  hosts: control_plane
+  gather_facts: true
+  tags: [always]
+
+  tasks:
+    - name: Stamp the deployment identity
+      ansible.builtin.set_fact:
+        forge_started_at: "{{ ansible_date_time.iso8601 }}"
+        forge_started_epoch: "{{ ansible_date_time.epoch }}"
+        cacheable: true
+      tags: [always]
+
+    - name: Announce the deployment
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+           FORGE-AI deployment {{ forge_deployment_id }}
+          ==========================================================
+           environment : {{ deployment.name }}
+           commit      : {{ forge_git_commit }}
+           branch      : {{ forge_git_branch }}
+           operator    : {{ forge_operator }}
+           trigger     : {{ forge_trigger }}
+           started     : {{ forge_started_at }}
+
+           targets:
+          {% for host in forge_hosts %}
+             {{ '%-16s' | format(host.name) }} {{ host.profile }}
+                {{ host.ip_address }} / {{ host.mac_address }}
+                {{ host.vcpu }} vCPU, {{ host.memory_mb }} MB, {{ host.disk_gb }} GB, {{ host.firmware | upper }}
+          {% endfor %}
+          {% if media.windows.iso_path | default('') | length == 0 %}
+
+           No Windows media configured: the Windows stages will end cleanly and
+           only the Ubuntu target will be deployed. That is a supported outcome.
+           See docs/WINDOWS-PROVISIONING.md to add it.
+          {% endif %}
+          ==========================================================
+      tags: [always]
+
+# --- 1. can this host do it at all? ----------------------------------
+- name: Import the prerequisite validation
+  ansible.builtin.import_playbook: validate-prerequisites.yml
+  tags: [validation]
+
+# --- 2. network and boot services ------------------------------------
+- name: Import the PXE stack deployment
+  ansible.builtin.import_playbook: deploy-pxe-stack.yml
+  tags: [provisioning]
+
+# --- 3. media ---------------------------------------------------------
+- name: Import the Ubuntu media preparation
+  ansible.builtin.import_playbook: prepare-ubuntu-media.yml
+  tags: [media]
+
+- name: Import the Windows media preparation
+  ansible.builtin.import_playbook: prepare-windows-media.yml
+  tags: [media]
+
+# --- 4. virtual machines ---------------------------------------------
+- name: Import the VM creation
+  ansible.builtin.import_playbook: create-vms.yml
+  tags: [provisioning]
+
+# --- 5. unattended installation --------------------------------------
+- name: Import the Ubuntu provisioning
+  ansible.builtin.import_playbook: provision-ubuntu.yml
+  tags: [provisioning, linux]
+
+- name: Import the Windows provisioning
+  ansible.builtin.import_playbook: provision-windows.yml
+  tags: [provisioning, windows]
+
+# --- 6. configuration -------------------------------------------------
+- name: Import the target configuration
+  ansible.builtin.import_playbook: configure-targets.yml
+  tags: [configuration]
+
+# --- 7. validation and reporting --------------------------------------
+- name: Import the deployment validation
+  ansible.builtin.import_playbook: validate-deployment.yml
+  tags: [validation, reporting]

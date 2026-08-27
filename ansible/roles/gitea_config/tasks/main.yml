@@ -1,0 +1,254 @@
+---
+# =====================================================================
+# gitea_config -- the internal GitOps repository
+# =====================================================================
+# Everything here goes through the Gitea REST API v1 with the admin
+# token created by bootstrap/bootstrap.sh. Where the API genuinely
+# cannot do something, the role says so and prints the manual steps
+# rather than pretending.
+#
+# Two integration strategies, selected by gitops.sync_strategy:
+#
+#   mirror  (default) Gitea pulls from GitHub on a schedule. Nothing in
+#           GitHub needs a credential for Gitea, so a compromised GitHub
+#           Actions runner cannot push to the GitOps repository.
+#
+#   push    GitHub Actions pushes approved main-branch commits into
+#           Gitea using a scoped deploy token. Propagation is immediate
+#           instead of up to gitea_mirror_interval, at the cost of
+#           holding a Gitea credential in GitHub secrets.
+#
+# docs/GITOPS-WORKFLOW.md compares them properly.
+# =====================================================================
+
+- name: Wait for the Gitea API
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/version"
+    method: GET
+    status_code: [200]
+  register: forge_gitea_version
+  retries: "{{ (gitea_wait_timeout | int / 10) | round | int }}"
+  delay: 10
+  until: forge_gitea_version is succeeded
+  changed_when: false
+  tags: [bootstrap, gitops]
+
+- name: Report the Gitea version
+  ansible.builtin.debug:
+    msg: "Gitea {{ forge_gitea_version.json.version }} is answering at {{ gitea_api_url }}"
+  tags: [bootstrap, gitops]
+
+- name: Require an API token
+  ansible.builtin.assert:
+    that:
+      - vault_gitea_api_token | default('') | length > 0
+    fail_msg: |
+      vault_gitea_api_token is empty.
+
+      Create a token scoped to what this role actually needs
+      (write:organization, write:repository, write:user) in the Gitea UI under
+      Settings -> Applications, or with:
+
+        docker compose exec -u git gitea gitea admin user generate-access-token \
+          --username {{ gitops.gitea_admin_user }} --scopes write:organization,write:repository \
+          --token-name forge-ai-automation
+
+      Then store it in the vault:
+        ansible-vault edit ansible/inventories/poc/group_vars/all/vault.yml
+
+      Do not use a token with sudo/admin scope for routine automation --
+      see docs/SECURITY.md, "Gitea token theft".
+    success_msg: "Gitea API token present ({{ vault_gitea_api_token | redact }})"
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Look for the organisation
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/orgs/{{ gitops.gitea_org }}"
+    method: GET
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+    status_code: [200, 404]
+  register: forge_gitea_org
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the organisation
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/orgs"
+    method: POST
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      username: "{{ gitops.gitea_org }}"
+      full_name: "FORGE-AI GitOps"
+      description: "Desired-state repository consumed by Semaphore"
+      visibility: private
+      repo_admin_change_team_access: true
+    status_code: [201]
+  when: forge_gitea_org.status == 404
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Look for the GitOps repository
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/repos/{{ gitops.gitea_org }}/{{ gitops.gitea_repo }}"
+    method: GET
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+    status_code: [200, 404]
+  register: forge_gitea_repo
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the GitOps repository as a mirror of the GitHub upstream
+  # A pull mirror means GitHub holds no credential for Gitea at all.
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/repos/migrate"
+    method: POST
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      clone_addr: "{{ gitea_upstream_url }}"
+      repo_owner: "{{ gitops.gitea_org }}"
+      repo_name: "{{ gitops.gitea_repo }}"
+      description: "Mirror of {{ gitops.github_repository }} -- the approved desired state"
+      mirror: true
+      mirror_interval: "{{ gitea_mirror_interval }}"
+      private: true
+      service: git
+      wiki: false
+      issues: false
+      pull_requests: false
+      releases: false
+    status_code: [201]
+    timeout: 300
+  when:
+    - gitea_manage_repository | bool
+    - forge_gitea_repo.status == 404
+    - gitops.sync_strategy == 'mirror'
+  register: forge_gitea_mirror
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create an empty GitOps repository for the push strategy
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/orgs/{{ gitops.gitea_org }}/repos"
+    method: POST
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ gitops.gitea_repo }}"
+      description: "Approved desired state, pushed by GitHub Actions from {{ gitops.github_repository }}"
+      private: true
+      auto_init: false
+      default_branch: "{{ gitops.default_branch }}"
+    status_code: [201]
+  when:
+    - gitea_manage_repository | bool
+    - forge_gitea_repo.status == 404
+    - gitops.sync_strategy == 'push'
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Require a webhook secret
+  ansible.builtin.assert:
+    that:
+      - vault_gitea_webhook_secret | default('') | length >= 32
+    fail_msg: |
+      vault_gitea_webhook_secret is missing or shorter than 32 characters.
+
+      The receiver verifies HMAC-SHA256 over the raw request body and rejects
+      everything that does not match. Without a strong secret, anyone who can
+      reach the receiver can trigger an infrastructure deployment.
+
+      Generate one with ./bootstrap/create-secrets.sh; it must match
+      FORGE_WEBHOOK_SECRET in compose/.env.
+    success_msg: "Webhook secret present"
+  no_log: true
+  when: gitea_manage_webhook | bool
+  tags: [bootstrap, gitops, security]
+
+- name: List the existing webhooks
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/repos/{{ gitops.gitea_org }}/{{ gitops.gitea_repo }}/hooks"
+    method: GET
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+    status_code: [200, 404]
+  register: forge_gitea_hooks
+  changed_when: false
+  when: gitea_manage_webhook | bool
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the push webhook
+  ansible.builtin.uri:
+    url: "{{ gitea_api_url }}/repos/{{ gitops.gitea_org }}/{{ gitops.gitea_repo }}/hooks"
+    method: POST
+    headers:
+      Authorization: "token {{ vault_gitea_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: gitea
+      active: true
+      events: [push]
+      branch_filter: "{{ gitops.default_branch }}"
+      config:
+        url: "{{ gitea_webhook_url }}"
+        content_type: json
+        # Gitea signs the body with HMAC-SHA256 and sends the hex digest
+        # in X-Gitea-Signature. The receiver verifies it before parsing.
+        secret: "{{ vault_gitea_webhook_secret }}"
+    status_code: [201]
+  when:
+    - gitea_manage_webhook | bool
+    - forge_gitea_hooks.status | default(404) == 200
+    - forge_gitea_hooks.json | default([]) | selectattr('config.url', 'eq', gitea_webhook_url) | list | length == 0
+  no_log: true
+  register: forge_gitea_hook_created
+  tags: [bootstrap, gitops, security]
+
+- name: Report the webhook state
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Push webhook created' if forge_gitea_hook_created is changed else 'Push webhook already present' }}
+      -> {{ gitea_webhook_url }} (branch filter: {{ gitops.default_branch }}, HMAC-SHA256 signed)
+  when: gitea_manage_webhook | bool
+  tags: [bootstrap, gitops]
+
+- name: Print the branch protection steps
+  # Gitea's branch protection API exists but its payload shape has moved
+  # between releases, and getting it wrong silently leaves the branch
+  # unprotected -- which is worse than not attempting it. The manual
+  # steps are printed instead of guessing.
+  ansible.builtin.debug:
+    msg: |
+      Branch protection is NOT configured automatically.
+
+      Gitea's branch-protection payload has changed shape between releases, and a
+      silently-wrong call leaves the branch unprotected -- worse than not trying.
+
+      Configure it once in the Gitea UI:
+        {{ forge_gitea_url }}/{{ gitops.gitea_org }}/{{ gitops.gitea_repo }}/settings/branches
+
+      For the '{{ gitops.default_branch }}' branch, enable:
+        * Enable Branch Protection
+        * Require approvals: 1
+        * Dismiss stale approvals
+        * Restrict pushes to allowlisted users (leave empty for mirrors)
+        * Block merge on rejected reviews
+
+      With sync_strategy=mirror the Gitea repository is read-only anyway: the
+      review gate lives in GitHub, and docs/GITOPS-WORKFLOW.md sets out the
+      recommended GitHub branch protection.
+  tags: [bootstrap, gitops, security]

@@ -1,0 +1,12 @@
+---
+ubuntu_baseline_update_cache: true
+ubuntu_baseline_upgrade_packages: false      # opt-in: an upgrade mid-demo is slow
+ubuntu_baseline_manage_firewall: "{{ baseline.ubuntu.firewall_enabled | default(true) }}"
+ubuntu_baseline_manage_ssh: true
+ubuntu_baseline_manage_ntp: true
+ubuntu_baseline_manage_audit: true
+ubuntu_baseline_allow_reboot: true
+ubuntu_baseline_reboot_timeout: 600
+# CIS-inspired settings. Demonstration only: this is not a CIS
+# benchmark run and does not claim conformance. See the role README.
+ubuntu_baseline_cis_demo: "{{ baseline.ubuntu.cis_demo_controls | default(true) }}"

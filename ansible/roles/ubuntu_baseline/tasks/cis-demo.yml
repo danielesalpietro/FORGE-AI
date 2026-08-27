@@ -1,0 +1,124 @@
+---
+# =====================================================================
+# CIS-INSPIRED DEMONSTRATION CONTROLS -- NOT A BENCHMARK RUN
+# =====================================================================
+# These settings are informed by the CIS Ubuntu Linux Benchmark but do
+# NOT constitute a benchmark run and MUST NOT be presented as CIS
+# conformance. A real assessment covers several hundred controls,
+# requires evidence collection, and has scored/not-scored distinctions
+# this role does not model.
+#
+# What is here is the handful of controls that are:
+#   * genuinely useful on a PoC target,
+#   * safe to apply without breaking the machine, and
+#   * cheap to verify in the drift report.
+#
+# Disable with baseline.ubuntu.cis_demo_controls: false.
+# =====================================================================
+
+- name: Disable uncommon filesystem modules
+  ansible.builtin.copy:
+    content: |
+      # Managed by FORGE-AI - CIS-inspired demonstration control
+      # Filesystems with no use on a server target and a history of
+      # kernel vulnerabilities.
+      install cramfs /bin/false
+      install freevxfs /bin/false
+      install jffs2 /bin/false
+      install hfs /bin/false
+      install hfsplus /bin/false
+      install squashfs /bin/true
+      install udf /bin/false
+      blacklist cramfs
+      blacklist freevxfs
+      blacklist jffs2
+      blacklist hfs
+      blacklist hfsplus
+      blacklist udf
+    dest: /etc/modprobe.d/60-forge-ai-filesystems.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [linux, security]
+
+- name: Apply kernel network hardening
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/60-forge-ai.conf
+    state: present
+    reload: true
+  become: true
+  loop: "{{ forge_sysctl_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+  vars:
+    forge_sysctl_settings:
+      net.ipv4.conf.all.accept_redirects: "0"
+      net.ipv4.conf.default.accept_redirects: "0"
+      net.ipv4.conf.all.secure_redirects: "0"
+      net.ipv4.conf.all.accept_source_route: "0"
+      net.ipv4.conf.default.accept_source_route: "0"
+      net.ipv4.conf.all.log_martians: "1"
+      net.ipv4.icmp_echo_ignore_broadcasts: "1"
+      net.ipv4.icmp_ignore_bogus_error_responses: "1"
+      net.ipv4.tcp_syncookies: "1"
+      net.ipv4.conf.all.rp_filter: "1"
+      net.ipv6.conf.all.accept_redirects: "0"
+      net.ipv6.conf.all.accept_source_route: "0"
+      kernel.randomize_va_space: "2"
+      # dmesg is a useful information leak to an unprivileged user.
+      kernel.dmesg_restrict: "1"
+      # A core dump from a setuid binary can contain credentials.
+      fs.suid_dumpable: "0"
+  tags: [linux, security]
+
+- name: Set restrictive permissions on sensitive files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  become: true
+  loop:
+    - { path: /etc/passwd, owner: root, group: root, mode: "0644" }
+    - { path: /etc/shadow, owner: root, group: shadow, mode: "0640" }
+    - { path: /etc/group, owner: root, group: root, mode: "0644" }
+    - { path: /etc/gshadow, owner: root, group: shadow, mode: "0640" }
+    - { path: /etc/ssh/sshd_config, owner: root, group: root, mode: "0600" }
+    - { path: /boot/grub/grub.cfg, owner: root, group: root, mode: "0600" }
+  loop_control:
+    label: "{{ item.path }}"
+  failed_when: false
+  tags: [linux, security]
+
+- name: Configure unattended security upgrades
+  ansible.builtin.copy:
+    content: |
+      // Managed by FORGE-AI - CIS-inspired demonstration control
+      // Security updates only. A PoC target that reboots itself
+      // mid-demonstration is worse than a PoC target that is a few days
+      // behind, so automatic reboot stays off.
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+    dest: /etc/apt/apt.conf.d/52-forge-ai-unattended
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [linux, security]
+
+- name: State the scope of these controls in the run output
+  ansible.builtin.debug:
+    msg: >-
+      Applied CIS-INSPIRED demonstration controls. This is NOT a CIS benchmark
+      run and must not be reported as CIS conformance: a real assessment covers
+      several hundred controls with evidence collection. See
+      roles/ubuntu_baseline/README.md and docs/LIMITATIONS.md.
+  tags: [linux, security]

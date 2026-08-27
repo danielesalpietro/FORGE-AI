@@ -1,0 +1,9 @@
+---
+reporting_dir: "{{ storage.report_dir }}"
+reporting_formats: "{{ reporting.formats | default(['json', 'markdown']) }}"
+reporting_retain: "{{ reporting.retain | default(30) }}"
+# Base URL for links back to Semaphore task logs. Empty when the run did
+# not come from Semaphore.
+reporting_semaphore_url: "{{ lookup('env', 'SEMAPHORE_URL') | default('', true) }}"
+reporting_semaphore_task_id: "{{ lookup('env', 'SEMAPHORE_TASK_ID') | default('', true) }}"
+reporting_semaphore_project_id: "{{ lookup('env', 'SEMAPHORE_PROJECT_ID') | default('', true) }}"

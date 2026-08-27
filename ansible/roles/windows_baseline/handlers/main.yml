@@ -1,0 +1,18 @@
+---
+- name: Reboot the Windows host
+  ansible.windows.win_reboot:
+    reboot_timeout: "{{ windows_baseline_reboot_timeout }}"
+    post_reboot_delay: 30
+    # WinRM has to be answering again, not merely the machine pingable.
+    test_command: 'Get-Service WinRM | Select-Object -ExpandProperty Status'
+    msg: "Rebooting for FORGE-AI deployment {{ forge_deployment_id }}"
+  when:
+    - windows_baseline_allow_reboot | bool
+    - not ansible_check_mode
+  listen: reboot windows
+
+- name: Restart WinRM
+  ansible.windows.win_service:
+    name: WinRM
+    state: restarted
+  listen: restart winrm

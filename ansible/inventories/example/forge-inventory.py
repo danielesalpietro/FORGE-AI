@@ -1,0 +1,1 @@
+../poc/forge-inventory.py

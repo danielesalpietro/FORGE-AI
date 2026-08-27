@@ -1,0 +1,8 @@
+---
+# Recreate the network even when one with this name already exists.
+# Destructive: it disconnects running guests. destroy-poc.yml sets it.
+libvirt_network_force_recreate: false
+# Wait for the bridge address to appear before returning. The compose
+# stack binds to it, so a race here shows up as a confusing
+# "cannot assign requested address" from Docker.
+libvirt_network_bridge_timeout: 30

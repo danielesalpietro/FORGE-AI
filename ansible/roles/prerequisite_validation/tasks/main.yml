@@ -1,0 +1,373 @@
+---
+# =====================================================================
+# prerequisite_validation
+# =====================================================================
+# Everything this role does is read-only. It exists so that a run fails
+# in thirty seconds with an actionable message instead of twenty
+# minutes later with a half-created VM.
+#
+# Findings accumulate in forge_prereq_findings and are reported
+# together at the end: an operator on a fresh host wants the whole list,
+# not the first problem repeated five times.
+# =====================================================================
+
+- name: Initialise the findings list
+  ansible.builtin.set_fact:
+    forge_prereq_findings: []
+  tags: [always, validation]
+
+# ---------------------------------------------------------------------
+# Operating system
+# ---------------------------------------------------------------------
+- name: Record the operating system release
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: os-release
+      detail: >-
+        {{ ansible_distribution }} {{ ansible_distribution_version }} is not a
+        supported control host. FORGE-AI is validated on Ubuntu
+        {{ prereq_required_ubuntu_versions | join(', ') }}
+        (see docs/COMPATIBILITY.md). Override with -e forge_force=true.
+  when:
+    - ansible_distribution != 'Ubuntu' or ansible_distribution_version not in prereq_required_ubuntu_versions
+    - not forge_force | bool
+  tags: [validation]
+
+- name: Confirm the architecture is x86_64
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: architecture
+      detail: "FORGE-AI targets x86_64; this host reports {{ ansible_architecture }}"
+  when: ansible_architecture != 'x86_64'
+  tags: [validation]
+
+# ---------------------------------------------------------------------
+# Privilege
+# ---------------------------------------------------------------------
+- name: Verify privilege escalation works
+  ansible.builtin.command: id -u
+  become: true
+  changed_when: false
+  register: forge_prereq_uid
+  failed_when: false
+  tags: [validation]
+
+- name: Record a privilege escalation failure
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: sudo
+      detail: "cannot escalate to root: {{ forge_prereq_uid.stderr | default('unknown error') }}"
+  when: forge_prereq_uid.rc != 0 or forge_prereq_uid.stdout | default('1') != '0'
+  tags: [validation]
+
+# ---------------------------------------------------------------------
+# Hardware virtualisation
+# ---------------------------------------------------------------------
+- name: Read the CPU virtualisation flags
+  ansible.builtin.command: grep -Ec '(vmx|svm)' /proc/cpuinfo
+  changed_when: false
+  failed_when: false
+  register: forge_prereq_virt_flags
+  tags: [validation]
+
+- name: Record missing hardware virtualisation
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: cpu-virtualisation
+      detail: >-
+        No vmx/svm flag in /proc/cpuinfo. Enable Intel VT-x or AMD-V in
+        firmware. Inside a VM, enable nested virtualisation on the
+        hypervisor.
+  when: (forge_prereq_virt_flags.stdout | default('0') | int) == 0
+  tags: [validation]
+
+- name: Check /dev/kvm
+  ansible.builtin.stat:
+    path: /dev/kvm
+  register: forge_prereq_kvm
+  tags: [validation]
+
+- name: Record a missing or unusable /dev/kvm
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: dev-kvm
+      detail: >-
+        /dev/kvm is {{ 'missing' if not forge_prereq_kvm.stat.exists else 'not writable by this user' }}.
+        Install qemu-kvm and add the user to the 'kvm' group
+        (`sudo usermod -aG kvm,libvirt $USER`, then log in again).
+  when: not forge_prereq_kvm.stat.exists or not forge_prereq_kvm.stat.writeable | default(false)
+  tags: [validation]
+
+# ---------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------
+- name: Record insufficient memory
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    required: "{{ [prereq_min_memory_mb, (forge_hosts | map(attribute='memory_mb') | sum) + 4096] | max }}"
+    finding:
+      severity: error
+      check: memory
+      detail: >-
+        {{ ansible_memtotal_mb }} MB present, {{ required }} MB needed
+        ({{ forge_hosts | map(attribute='memory_mb') | sum }} MB for the targets plus
+        4096 MB for the control plane).
+  when: ansible_memtotal_mb < ([prereq_min_memory_mb, (forge_hosts | map(attribute='memory_mb') | sum) + 4096] | max | int)
+  tags: [validation]
+
+- name: Record insufficient CPU cores
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: warning
+      check: cpu-cores
+      detail: >-
+        {{ ansible_processor_vcpus }} vCPU present, {{ prereq_min_cpu_cores }} recommended;
+        installations will be slow.
+  when: ansible_processor_vcpus < prereq_min_cpu_cores | int
+  tags: [validation]
+
+- name: Measure free space on the artefact filesystem
+  ansible.builtin.command: "df -BG --output=avail {{ storage.artifacts_dir | dirname }}"
+  changed_when: false
+  failed_when: false
+  register: forge_prereq_df
+  tags: [validation]
+
+- name: Record insufficient disk space
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    available: "{{ (forge_prereq_df.stdout_lines[-1] | default('0G') | trim | regex_replace('G$', '')) | int }}"
+    required: "{{ [prereq_min_free_disk_gb, (forge_hosts | map(attribute='disk_gb') | sum) + 60] | max }}"
+    finding:
+      severity: error
+      check: disk-space
+      detail: >-
+        {{ available }} GB free under {{ storage.artifacts_dir | dirname }},
+        {{ required }} GB needed (qcow2 disks plus extracted installation media).
+  when:
+    - forge_prereq_df.rc == 0
+    - ((forge_prereq_df.stdout_lines[-1] | default('0G') | trim | regex_replace('G$', '')) | int)
+      < ([prereq_min_free_disk_gb, (forge_hosts | map(attribute='disk_gb') | sum) + 60] | max | int)
+  tags: [validation]
+
+# ---------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------
+- name: Look for the required commands
+  ansible.builtin.command: "command -v {{ item }}"
+  changed_when: false
+  failed_when: false
+  register: forge_prereq_commands
+  loop: "{{ prereq_required_commands }}"
+  tags: [validation]
+
+- name: Record missing commands
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    missing: "{{ forge_prereq_commands.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}"
+    finding:
+      severity: error
+      check: required-commands
+      detail: "not on PATH: {{ missing | join(', ') }} -- run ./bootstrap/prepare-host.sh"
+  when: forge_prereq_commands.results | selectattr('rc', 'ne', 0) | list | length > 0
+  tags: [validation]
+
+- name: Check that libvirtd is running
+  ansible.builtin.command: virsh --connect qemu:///system version
+  changed_when: false
+  failed_when: false
+  become: true
+  register: forge_prereq_libvirt
+  tags: [validation]
+
+- name: Record an unavailable libvirt
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: libvirt
+      detail: >-
+        cannot reach qemu:///system ({{ forge_prereq_libvirt.stderr | default('') | trim }}).
+        Try `sudo systemctl enable --now libvirtd`.
+  when: forge_prereq_libvirt.rc != 0
+  tags: [validation]
+
+- name: Check for OVMF firmware (UEFI guests)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/share/OVMF/OVMF_CODE_4M.fd
+    - /usr/share/OVMF/OVMF_CODE.fd
+    - /usr/share/ovmf/OVMF.fd
+  register: forge_prereq_ovmf
+  tags: [validation]
+
+- name: Record missing UEFI firmware
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: error
+      check: ovmf
+      detail: >-
+        No OVMF firmware found, but {{ forge_hosts | selectattr('firmware', 'eq', 'uefi') | map(attribute='name') | join(', ') }}
+        request UEFI. Install the `ovmf` package.
+  when:
+    - forge_hosts | selectattr('firmware', 'defined') | selectattr('firmware', 'eq', 'uefi') | list | length > 0
+    - forge_prereq_ovmf.results | selectattr('stat.exists') | list | length == 0
+  tags: [validation]
+
+# ---------------------------------------------------------------------
+# Network safety
+# ---------------------------------------------------------------------
+- name: Include the DHCP conflict probe
+  ansible.builtin.include_tasks: dhcp-conflict.yml
+  when: safety.abort_on_dhcp_conflict | default(true)
+  tags: [validation, network]
+
+- name: Check for listeners already holding the control-plane ports
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ss -Hln{{ 'u' if item.protocol | default('tcp') == 'udp' else 't' }} 'sport = :{{ item.port }}' | grep -c . || true
+    executable: /bin/bash
+  changed_when: false
+  become: true
+  register: forge_prereq_ports
+  loop: "{{ prereq_required_free_ports }}"
+  loop_control:
+    label: "{{ item.service }} ({{ item.protocol | default('tcp') }}/{{ item.port }})"
+  tags: [validation, network]
+
+- name: Record port conflicts
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: warning
+      check: port-conflict
+      detail: >-
+        Something already listens on {{ item.item.protocol | default('tcp') }}/{{ item.item.port }}
+        (needed by the {{ item.item.service }}). If it is a previous FORGE-AI run this is
+        expected; otherwise change the port in config/poc.yml. Inspect with
+        `sudo ss -lntup | grep :{{ item.item.port }}`.
+  loop: "{{ forge_prereq_ports.results }}"
+  loop_control:
+    label: "{{ item.item.service }}"
+  when: (item.stdout | default('0') | int) > 0
+  tags: [validation, network]
+
+# ---------------------------------------------------------------------
+# Media
+# ---------------------------------------------------------------------
+- name: Check the Ubuntu ISO
+  ansible.builtin.stat:
+    path: "{{ media.ubuntu.iso_path }}"
+  register: forge_prereq_ubuntu_iso
+  when: forge_hosts | selectattr('os_family', 'eq', 'linux') | list | length > 0
+  tags: [validation, media]
+
+- name: Record a missing Ubuntu ISO
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: warning
+      check: ubuntu-media
+      detail: >-
+        {{ media.ubuntu.iso_path }} is absent; run `make prepare-media` to
+        download and verify it.
+  when:
+    - forge_hosts | selectattr('os_family', 'eq', 'linux') | list | length > 0
+    - not forge_prereq_ubuntu_iso.stat.exists | default(false)
+  tags: [validation, media]
+
+- name: Check the operator-supplied Windows ISO
+  ansible.builtin.stat:
+    path: "{{ media.windows.iso_path }}"
+  register: forge_prereq_windows_iso
+  when:
+    - forge_hosts | selectattr('os_family', 'eq', 'windows') | list | length > 0
+    - media.windows.iso_path | default('') | length > 0
+  tags: [validation, media]
+
+- name: Record a missing Windows ISO
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: warning
+      check: windows-media
+      detail: >-
+        {{ 'media.windows.iso_path is empty' if media.windows.iso_path | default('') | length == 0
+           else media.windows.iso_path ~ ' does not exist' }}.
+        Windows Server media is operator-supplied and is never redistributed by this
+        repository; see docs/WINDOWS-PROVISIONING.md. The Ubuntu target is unaffected.
+  when:
+    - forge_hosts | selectattr('os_family', 'eq', 'windows') | list | length > 0
+    - media.windows.iso_path | default('') | length == 0 or not forge_prereq_windows_iso.stat.exists | default(false)
+  tags: [validation, media]
+
+# ---------------------------------------------------------------------
+# Verdict
+# ---------------------------------------------------------------------
+- name: Report the findings
+  ansible.builtin.debug:
+    msg: >-
+      {{ forge_prereq_findings | length }} finding(s):
+      {{ forge_prereq_findings | selectattr('severity', 'eq', 'error') | list | length }} error(s),
+      {{ forge_prereq_findings | selectattr('severity', 'eq', 'warning') | list | length }} warning(s).
+  tags: [validation]
+
+- name: Show each finding
+  ansible.builtin.debug:
+    msg: "[{{ item.severity | upper }}] {{ item.check }}: {{ item.detail | trim }}"
+  loop: "{{ forge_prereq_findings }}"
+  loop_control:
+    label: "{{ item.check }}"
+  tags: [validation]
+
+- name: Fail when a blocking prerequisite is missing
+  ansible.builtin.fail:
+    msg: |
+      Prerequisite validation failed with {{ forge_prereq_findings | selectattr('severity', 'eq', 'error') | list | length }} error(s):
+      {% for finding in forge_prereq_findings | selectattr('severity', 'eq', 'error') %}
+        * {{ finding.check }}: {{ finding.detail | trim }}
+      {% endfor %}
+
+      Fix these and re-run, or pass -e prereq_report_only=true to continue anyway
+      (which will fail later, in a less helpful place).
+  when:
+    - not prereq_report_only | bool
+    - forge_prereq_findings | selectattr('severity', 'eq', 'error') | list | length > 0
+  tags: [validation]
+
+- name: Publish the findings for the deployment report
+  ansible.builtin.set_fact:
+    forge_prereq_result:
+      checked_at: "{{ ansible_date_time.iso8601 }}"
+      findings: "{{ forge_prereq_findings }}"
+      status: "{{ 'fail' if forge_prereq_findings | selectattr('severity', 'eq', 'error') | list | length > 0 else 'pass' }}"
+    cacheable: true
+  tags: [always, validation]

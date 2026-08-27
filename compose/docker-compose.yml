@@ -19,7 +19,7 @@
 # Image tags are pinned. Digest pinning is the production
 # recommendation and is described in docs/SECURITY.md.
 # =====================================================================
-
+---
 name: forge-ai
 
 x-logging: &default-logging
@@ -362,15 +362,15 @@ networks:
         - subnet: ${DOCKER_BACKEND_SUBNET:-172.28.240.0/24}
 
 volumes:
-  database-data:   {name: forge-database-data}
-  gitea-data:      {name: forge-gitea-data}
-  gitea-config:    {name: forge-gitea-config}
-  semaphore-data:  {name: forge-semaphore-data}
+  database-data: {name: forge-database-data}
+  gitea-data: {name: forge-gitea-data}
+  gitea-config: {name: forge-gitea-config}
+  semaphore-data: {name: forge-semaphore-data}
   semaphore-config: {name: forge-semaphore-config}
-  semaphore-tmp:   {name: forge-semaphore-tmp}
-  proxy-cache:     {name: forge-proxy-cache}
-  proxy-run:       {name: forge-proxy-run}
-  bootsrv-cache:   {name: forge-bootsrv-cache}
-  bootsrv-run:     {name: forge-bootsrv-run}
-  winmedia-state:  {name: forge-winmedia-state}
-  winmedia-run:    {name: forge-winmedia-run}
+  semaphore-tmp: {name: forge-semaphore-tmp}
+  proxy-cache: {name: forge-proxy-cache}
+  proxy-run: {name: forge-proxy-run}
+  bootsrv-cache: {name: forge-bootsrv-cache}
+  bootsrv-run: {name: forge-bootsrv-run}
+  winmedia-state: {name: forge-winmedia-state}
+  winmedia-run: {name: forge-winmedia-run}

@@ -1,0 +1,24 @@
+---
+# =====================================================================
+# FORGE-AI :: per-host overrides for poc-ubuntu-01
+# =====================================================================
+# Addressing, resources and MAC come from config/poc.yml via
+# forge-inventory.py. Nothing that belongs in the desired state should
+# be restated here -- this file is for host-specific *behaviour*.
+# =====================================================================
+
+# Extra packages installed on this host on top of baseline.ubuntu.packages.
+forge_extra_packages:
+  - htop
+  - net-tools
+  - tcpdump
+
+# Serial console is enabled on this domain, so a Subiquity run can be
+# watched with `virsh console poc-ubuntu-01`. Recorded here so the
+# troubleshooting docs and the smoke test agree on the method.
+forge_console_available: true
+
+# Demonstration hook for the drift runbook: docs/DEMO-RUNBOOK.md changes
+# /etc/issue.net by hand on this host and the drift report has to catch
+# it. Nothing reads this variable except the runbook narrative.
+forge_drift_demo_target: /etc/issue.net

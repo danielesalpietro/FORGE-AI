@@ -1,0 +1,18 @@
+---
+# Rebuild the WinPE image even if one is already staged.
+winpe_force_rebuild: false
+# Driver .inf file names loaded by startnet.cmd with drvload, in order.
+# Storage first: without viostor there is no disk to partition.
+winpe_driver_inf_names:
+  - viostor.inf
+  - vioscsi.inf
+  - netkvm.inf
+  - balloon.inf
+  - vioser.inf
+# How many times startnet.cmd retries the gateway ping before giving up.
+winpe_network_retries: 30
+# wimboot release used to chainload WinPE from iPXE.
+wimboot_version: "v2.8.0"
+wimboot_url: "https://github.com/ipxe/wimboot/releases/download/{{ wimboot_version }}/wimboot"
+# Pin this once downloaded; the role prints the observed digest.
+wimboot_sha256: ""

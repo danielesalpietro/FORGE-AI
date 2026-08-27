@@ -1,0 +1,108 @@
+---
+# =====================================================================
+# Windows Firewall
+# =====================================================================
+# All three profiles on, inbound blocked by default, and the management
+# rule scoped to security.management_cidrs rather than "Any".
+#
+# Configure-WinRM.ps1 already created the scoped WinRM rule during the
+# specialize phase. This file restates it as managed desired state so a
+# rule someone widened by hand is detected and corrected -- which is
+# exactly the drift demonstration in docs/DEMO-RUNBOOK.md.
+# =====================================================================
+
+- name: Enable every firewall profile with inbound blocked
+  ansible.windows.win_firewall:
+    state: enabled
+    profiles: [Domain, Private, Public]
+  register: forge_win_firewall
+  tags: [windows, security]
+
+- name: Set the default inbound and outbound actions
+  ansible.windows.win_shell: |
+    $changed = $false
+    foreach ($profileName in @('Domain','Private','Public')) {
+      $profile = Get-NetFirewallProfile -Name $profileName
+      if ($profile.DefaultInboundAction -ne 'Block' -or $profile.DefaultOutboundAction -ne 'Allow') {
+        Set-NetFirewallProfile -Name $profileName -DefaultInboundAction Block -DefaultOutboundAction Allow
+        $changed = $true
+      }
+      if (-not $profile.LogAllowed -or -not $profile.LogBlocked) {
+        Set-NetFirewallProfile -Name $profileName -LogAllowed True -LogBlocked True -LogMaxSizeKilobytes 16384
+        $changed = $true
+      }
+    }
+    if ($changed) { Write-Output 'changed' } else { Write-Output 'unchanged' }
+  register: forge_win_fw_defaults
+  changed_when: forge_win_fw_defaults.stdout is search('changed')
+  check_mode: false
+  tags: [windows, security]
+
+- name: Scope the WinRM HTTPS rule to the management networks
+  community.windows.win_firewall_rule:
+    name: FORGE-AI-WinRM-HTTPS-In
+    localport: "{{ security.winrm_port }}"
+    action: allow
+    direction: in
+    protocol: tcp
+    remoteip: "{{ security.management_cidrs | join(',') }}"
+    profiles: [Domain, Private, Public]
+    description: "Ansible/Semaphore management access (FORGE-AI managed state)"
+    state: present
+    enabled: true
+  tags: [windows, security, drift]
+
+- name: Allow ICMP echo from the management networks
+  community.windows.win_firewall_rule:
+    name: FORGE-AI-ICMPv4-In
+    action: allow
+    direction: in
+    protocol: icmpv4:8,*
+    remoteip: "{{ security.management_cidrs | join(',') }}"
+    profiles: [Domain, Private, Public]
+    description: "FORGE-AI reachability probe"
+    state: present
+    enabled: true
+  tags: [windows, security]
+
+- name: Disable the broad built-in WinRM rules
+  # Windows ships WinRM rules scoped to "Any". Leaving them enabled next
+  # to a scoped rule means the scope achieves nothing.
+  ansible.windows.win_shell: |
+    $rules = Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue |
+             Where-Object { $_.Enabled -eq 'True' }
+    if ($rules) {
+      $rules | Disable-NetFirewallRule
+      Write-Output "changed:$($rules.Count)"
+    } else {
+      Write-Output 'unchanged'
+    }
+  register: forge_win_fw_builtin
+  changed_when: forge_win_fw_builtin.stdout is search('^changed:')
+  check_mode: false
+  tags: [windows, security]
+
+- name: Control Remote Desktop
+  ansible.windows.win_regedit:
+    path: 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
+    name: fDenyTSConnections
+    data: "{{ 0 if security.windows_rdp_enabled | default(false) else 1 }}"
+    type: dword
+  tags: [windows, security, drift]
+
+- name: Set the Remote Desktop firewall group to match
+  ansible.windows.win_shell: |
+    $enable = ${{ 'true' if security.windows_rdp_enabled | default(false) else 'false' }}
+    $rules = Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
+    $target = if ($enable) { 'True' } else { 'False' }
+    $wrong = $rules | Where-Object { $_.Enabled -ne $target }
+    if ($wrong) {
+      if ($enable) { $wrong | Enable-NetFirewallRule } else { $wrong | Disable-NetFirewallRule }
+      Write-Output "changed:$($wrong.Count)"
+    } else {
+      Write-Output 'unchanged'
+    }
+  register: forge_win_rdp_rules
+  changed_when: forge_win_rdp_rules.stdout is search('^changed:')
+  check_mode: false
+  tags: [windows, security]

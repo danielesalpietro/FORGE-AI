@@ -1,0 +1,14 @@
+---
+# What to do with the domain: present | running | stopped | absent
+vm_lifecycle_state: running
+# Recreate the qcow2 disk. DESTRUCTIVE: wipes the installed OS.
+vm_lifecycle_recreate_disk: false
+# Force redefinition of an existing domain from the rendered XML.
+vm_lifecycle_redefine: false
+# 'network' during provisioning, 'hd' once the host is installed.
+forge_boot_target: network
+# Also remove the UEFI NVRAM file when destroying. A stale NVRAM
+# remembers the old boot order and will send a rebuilt VM straight to a
+# disk that no longer has an OS on it.
+vm_lifecycle_purge_nvram: true
+vm_lifecycle_shutdown_timeout: 120

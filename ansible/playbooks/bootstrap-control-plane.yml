@@ -1,0 +1,166 @@
+---
+# =====================================================================
+# Prepare the KVM host and bring up the Docker control plane.
+# =====================================================================
+#   make bootstrap
+#
+# Order matters and is enforced here rather than in documentation:
+#
+#   1. host packages and libvirt        (the bridge cannot exist first)
+#   2. the provisioning network         (creates virbr-forge)
+#   3. the Docker stack                 (bootsrv binds to 192.168.250.1)
+#   4. Gitea and Semaphore configuration
+#
+# Step 3 fails with "cannot assign requested address" if step 2 has not
+# happened, which is why they are not separate playbooks.
+# =====================================================================
+- name: Bootstrap the FORGE-AI control plane
+  hosts: control_plane
+  gather_facts: true
+  tags: [bootstrap]
+
+  pre_tasks:
+    - name: Validate the prerequisites first
+      ansible.builtin.include_role:
+        name: prerequisite_validation
+      tags: [bootstrap, validation]
+
+  roles:
+    - role: libvirt_host
+      tags: [bootstrap]
+
+    - role: libvirt_network
+      tags: [bootstrap, network]
+
+  tasks:
+    - name: Render the boot server configuration
+      # Written outside the container image so a change to the template
+      # does not require a rebuild.
+      ansible.builtin.template:
+        src: nginx/boot-server.conf.j2
+        dest: "{{ storage.artifacts_dir }}/config/boot-server.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+      tags: [bootstrap]
+
+    - name: Confirm the compose environment file exists
+      ansible.builtin.stat:
+        path: "{{ forge_compose_env_file }}"
+      register: forge_compose_env
+      tags: [bootstrap]
+
+    - name: Stop when the compose environment file is missing
+      ansible.builtin.fail:
+        msg: |
+          {{ forge_compose_env_file }} does not exist.
+
+            cp compose/.env.example compose/.env
+            ./bootstrap/create-secrets.sh
+
+          The stack refuses to start with placeholder credentials -- every
+          required variable uses the ${VAR:?message} form in docker-compose.yml.
+      when: not forge_compose_env.stat.exists
+      tags: [bootstrap]
+
+    - name: Refuse to start with placeholder secrets
+      ansible.builtin.command: "grep -c '=CHANGEME' {{ forge_compose_env_file }}"
+      become: true
+      changed_when: false
+      failed_when: false
+      register: forge_compose_placeholders
+      tags: [bootstrap, security]
+
+    - name: Stop when placeholders survived
+      ansible.builtin.fail:
+        msg: |
+          {{ forge_compose_placeholders.stdout | trim }} placeholder value(s) remain in
+          {{ forge_compose_env_file }}.
+
+          Generate real ones:
+            ./bootstrap/create-secrets.sh
+
+          Starting Gitea and Semaphore with the literal password "CHANGEME" would
+          be worse than not starting them at all.
+      when: (forge_compose_placeholders.stdout | default('0') | trim | int) > 0
+      tags: [bootstrap, security]
+
+    - name: Bring up the control plane
+      community.docker.docker_compose_v2:
+        project_src: "{{ forge_repo_root }}/compose"
+        files: [docker-compose.yml]
+        env_files: ["{{ forge_compose_env_file }}"]
+        profiles: "{{ ['windows'] if media.windows.iso_path | default('') | length > 0 else [] }}"
+        state: present
+        build: policy
+        wait: true
+        wait_timeout: 600
+      become: true
+      register: forge_compose_up
+      tags: [bootstrap]
+
+    - name: Report the container states
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.Service }}: {{ item.State }}
+          {{ '(' ~ item.Health ~ ')' if item.Health | default('') | length > 0 else '' }}
+      loop: "{{ forge_compose_up.containers | default([]) }}"
+      loop_control:
+        label: "{{ item.Service }}"
+      tags: [bootstrap]
+
+    - name: Wait for the boot server
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/healthz"
+        method: GET
+        status_code: [200]
+      register: forge_bootsrv_health
+      retries: 30
+      delay: 5
+      until: forge_bootsrv_health is succeeded
+      tags: [bootstrap, validation]
+
+    - name: Wait for the state service
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/healthz"
+        method: GET
+        status_code: [200]
+      register: forge_state_health
+      retries: 30
+      delay: 5
+      until: forge_state_health is succeeded
+      tags: [bootstrap, validation]
+
+    - name: Report the control plane endpoints
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+           FORGE-AI control plane is up
+          ==========================================================
+           Gitea      : {{ forge_gitea_url }}
+           Semaphore  : {{ forge_semaphore_url }}
+           Boot server: {{ forge_boot_base_url }}  ({{ forge_bootsrv_health.json.status }})
+           State API  : {{ forge_boot_base_url }}/api/state
+                        ({{ forge_state_health.json.known_hosts }} host(s) registered,
+                         auth: {{ forge_state_health.json.auth }},
+                         max install attempts: {{ forge_state_health.json.max_install_attempts }})
+
+           Gitea and Semaphore are published on {{ lookup('env', 'BIND_ADDRESS') | default('127.0.0.1', true) }}
+           with a self-signed certificate. From another machine, tunnel:
+             ssh -L 8443:127.0.0.1:8443 {{ ansible_user_id }}@<this-host>
+
+           Next: make prepare-media
+          ==========================================================
+      tags: [bootstrap]
+
+- name: Configure Gitea and Semaphore
+  hosts: control_plane
+  gather_facts: false
+  tags: [bootstrap, gitops]
+
+  roles:
+    - role: gitea_config
+      tags: [bootstrap, gitops]
+    - role: semaphore_config
+      tags: [bootstrap, gitops]

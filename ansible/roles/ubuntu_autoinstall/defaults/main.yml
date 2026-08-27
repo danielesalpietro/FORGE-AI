@@ -1,0 +1,8 @@
+---
+# Remove the rendered NoCloud seed once the host reports "installed".
+# The seed carries a password *hash*, not a cleartext password, but it
+# is still material an attacker on the provisioning segment would like.
+ubuntu_autoinstall_purge_seed: "{{ security.purge_answer_files_after_install | default(true) }}"
+# Validate the rendered user-data as YAML and against the mandatory keys
+# before publishing it. Turning this off is never a good idea.
+ubuntu_autoinstall_validate: true

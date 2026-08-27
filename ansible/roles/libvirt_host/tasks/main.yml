@@ -1,0 +1,156 @@
+---
+# =====================================================================
+# libvirt_host -- prepare the KVM host itself
+# =====================================================================
+# Idempotent: safe to run on every deployment. It installs packages,
+# makes libvirt usable without sudo for the operator, and creates the
+# storage pool and the directory tree everything else writes into.
+# =====================================================================
+
+- name: Install the virtualisation and provisioning packages
+  ansible.builtin.apt:
+    name: "{{ forge_host_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  when: libvirt_host_install_packages | bool
+  register: forge_libvirt_packages
+  retries: 3
+  delay: 10
+  until: forge_libvirt_packages is succeeded
+  tags: [bootstrap, provisioning]
+
+- name: Enable and start libvirtd
+  ansible.builtin.systemd_service:
+    name: libvirtd
+    enabled: true
+    state: started
+  become: true
+  tags: [bootstrap, provisioning]
+
+- name: Add the operator to the libvirt and kvm groups
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: [libvirt, kvm]
+    append: true
+  become: true
+  loop: "{{ libvirt_host_users | select | list }}"
+  register: forge_libvirt_groups
+  tags: [bootstrap]
+
+- name: Point out that a new group membership needs a fresh login  # noqa: no-handler
+  # Not a handler: this must be said immediately after the change, in
+  # context, not deferred to the end of the play where the operator has
+  # stopped reading.
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }} was added to the libvirt/kvm groups. The change only
+      takes effect in a new login session -- until then, virsh still needs sudo.
+  loop: "{{ forge_libvirt_groups.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('') }}"
+  when: item is changed
+  tags: [bootstrap]
+
+- name: Create the FORGE-AI directory tree
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  become: true
+  loop:
+    - { path: "{{ storage.artifacts_dir }}" }
+    - { path: "{{ storage.http_root }}" }
+    - { path: "{{ storage.http_root }}/boot" }
+    - { path: "{{ storage.http_root }}/ipxe" }
+    - { path: "{{ storage.http_root }}/wimboot" }
+    - { path: "{{ storage.http_root }}/iso" }
+    - { path: "{{ storage.http_root }}/ubuntu" }
+    - { path: "{{ storage.http_root }}/windows" }
+    - { path: "{{ storage.tftp_root }}" }
+    - { path: "{{ storage.iso_dir }}" }
+    - { path: "{{ storage.log_dir }}" }
+    - { path: "{{ storage.log_dir }}/nginx" }
+    - { path: "{{ storage.log_dir }}/guests" }
+    - { path: "{{ storage.report_dir }}" }
+    - { path: "{{ storage.artifacts_dir }}/config" }
+    # The state service runs as UID 10001 inside its container and needs
+    # to write here; see compose/state-service/Dockerfile.
+    - { path: "{{ storage.state_dir }}", owner: "10001", group: "10001", mode: "0750" }
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [bootstrap, provisioning]
+
+- name: Define the libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ storage.libvirt_pool_name }}"
+    command: define
+    xml: |
+      <pool type='dir'>
+        <name>{{ storage.libvirt_pool_name }}</name>
+        <target>
+          <path>{{ storage.libvirt_pool_path }}</path>
+        </target>
+      </pool>
+    uri: qemu:///system
+  become: true
+  when: libvirt_host_manage_storage_pool | bool
+  register: forge_pool_define
+  failed_when:
+    - forge_pool_define is failed
+    - "'already exists' not in (forge_pool_define.msg | default(''))"
+  tags: [bootstrap, provisioning]
+
+- name: Start the libvirt storage pool and mark it autostart
+  community.libvirt.virt_pool:
+    name: "{{ storage.libvirt_pool_name }}"
+    state: active
+    autostart: true
+    uri: qemu:///system
+  become: true
+  when: libvirt_host_manage_storage_pool | bool
+  tags: [bootstrap, provisioning]
+
+- name: Allow QEMU to read the boot artefacts
+  # qemu runs as libvirt-qemu:kvm and needs to traverse into the ISO
+  # directory when a VM is given a CD-ROM. Without the traversal bit the
+  # failure surfaces as a confusing "Could not open ... Permission denied".
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ storage.artifacts_dir }}"
+    - "{{ storage.iso_dir }}"
+  tags: [bootstrap, provisioning]
+
+- name: Read the installed component versions for the report
+  ansible.builtin.command: "{{ item.cmd }}"
+  changed_when: false
+  failed_when: false
+  register: forge_host_versions
+  loop:
+    - { name: libvirt, cmd: "virsh --version" }
+    - { name: qemu, cmd: "qemu-system-x86_64 --version" }
+    - { name: dnsmasq, cmd: "dnsmasq --version" }
+    - { name: docker, cmd: "docker --version" }
+    - { name: ansible, cmd: "ansible --version" }
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [bootstrap, provisioning, validation]
+
+- name: Publish the component versions
+  ansible.builtin.set_fact:
+    forge_component_versions: >-
+      {{ dict(forge_host_versions.results
+              | map(attribute='item.name')
+              | zip(forge_host_versions.results
+                    | map(attribute='stdout')
+                    | map('default', 'unavailable', true)
+                    | map('regex_replace', '\n.*$', ''))) }}
+    cacheable: true
+  tags: [bootstrap, provisioning, validation]

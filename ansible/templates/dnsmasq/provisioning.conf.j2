@@ -27,8 +27,8 @@ no-hosts
 domain-needed
 bogus-priv
 expand-hosts
-domain={{ environment.domain }}
-local=/{{ environment.domain }}/
+domain={{ deployment.domain }}
+local=/{{ deployment.domain }}/
 
 # ---------------------------------------------------------------------
 # DNS
@@ -54,7 +54,7 @@ dhcp-authoritative
 dhcp-range={{ provisioning_network.dhcp_start }},{{ provisioning_network.dhcp_end }},{{ provisioning_network.netmask }},12h
 dhcp-option=option:router,{{ provisioning_network.gateway }}
 dhcp-option=option:dns-server,{{ provisioning_network.gateway }}
-dhcp-option=option:domain-name,{{ environment.domain }}
+dhcp-option=option:domain-name,{{ deployment.domain }}
 {% if provisioning_network.ntp_servers | default([]) | length > 0 %}
 dhcp-option=option:ntp-server,{{ provisioning_network.gateway }}
 {% endif %}
@@ -64,7 +64,7 @@ dhcp-leasefile={{ storage.state_dir }}/dnsmasq.leases
 # ---------------------------------------------------------------------
 # Static reservations (one per configured host)
 # ---------------------------------------------------------------------
-{% for host in hosts %}
+{% for host in forge_hosts %}
 # {{ host.name }} -- {{ host.profile }} ({{ host.vcpu }} vCPU / {{ host.memory_mb }} MB / {{ host.disk_gb }} GB)
 dhcp-host={{ host.mac_address }},{{ host.ip_address }},{{ host.name }},set:{{ host.mac_address | replace(':', '-') }},infinite
 {% endfor %}

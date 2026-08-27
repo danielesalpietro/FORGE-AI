@@ -1,0 +1,155 @@
+---
+# =====================================================================
+# ubuntu_baseline -- desired state for the Ubuntu target
+# =====================================================================
+# Every task here is idempotent and every task is a statement of desired
+# state, because this same role runs in check mode during drift
+# detection. A task that is "idempotent in practice" but reports changed
+# every run would make the drift report cry wolf permanently.
+# =====================================================================
+
+- name: Confirm this is the host the inventory thinks it is
+  ansible.builtin.assert:
+    that:
+      - ansible_hostname == inventory_hostname
+    fail_msg: >-
+      Connected to {{ inventory_hostname }} ({{ ansible_host }}) but the machine
+      calls itself '{{ ansible_hostname }}'. Either the DHCP reservation points at
+      the wrong VM or a previous host still holds this address. Check:
+      `virsh net-dhcp-leases {{ provisioning_network.name }}`
+    success_msg: "{{ inventory_hostname }} identity confirmed"
+  tags: [linux, validation]
+
+- name: Set the hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+    use: systemd
+  become: true
+  tags: [linux, bootstrap]
+
+- name: Maintain /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ ansible_default_ipv4.address | regex_escape }}\\s"
+    line: "{{ ansible_default_ipv4.address }} {{ inventory_hostname }}.{{ deployment.domain }} {{ inventory_hostname }}"
+    state: present
+  become: true
+  tags: [linux, bootstrap]
+
+- name: Update the package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  when: ubuntu_baseline_update_cache | bool
+  tags: [linux, bootstrap]
+
+- name: Install the baseline packages
+  ansible.builtin.apt:
+    name: "{{ baseline.ubuntu.packages + (forge_extra_packages | default([])) }}"
+    state: present
+  become: true
+  register: forge_ubuntu_packages
+  retries: 3
+  delay: 10
+  until: forge_ubuntu_packages is succeeded
+  tags: [linux, bootstrap]
+
+- name: Apply pending security updates
+  ansible.builtin.apt:
+    upgrade: safe
+    autoremove: true
+  become: true
+  when: ubuntu_baseline_upgrade_packages | bool
+  tags: [linux, security]
+
+- name: Enable the QEMU guest agent
+  # This is what lets `virsh domifaddr --source agent` read the guest's
+  # address, which the smoke test uses instead of trusting DHCP.
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent
+    enabled: true
+    state: started
+  become: true
+  tags: [linux, bootstrap, validation]
+
+- name: Include the automation account tasks
+  ansible.builtin.include_tasks: users.yml
+  tags: [linux, security]
+
+- name: Include the SSH hardening tasks
+  ansible.builtin.include_tasks: ssh.yml
+  when: ubuntu_baseline_manage_ssh | bool
+  tags: [linux, security]
+
+- name: Include the firewall tasks
+  ansible.builtin.include_tasks: firewall.yml
+  when: ubuntu_baseline_manage_firewall | bool
+  tags: [linux, security]
+
+- name: Include the time synchronisation tasks
+  ansible.builtin.include_tasks: time.yml
+  when: ubuntu_baseline_manage_ntp | bool
+  tags: [linux, bootstrap]
+
+- name: Include the audit logging tasks
+  ansible.builtin.include_tasks: audit.yml
+  when: ubuntu_baseline_manage_audit | bool
+  tags: [linux, security]
+
+- name: Include the CIS-inspired demonstration controls
+  ansible.builtin.include_tasks: cis-demo.yml
+  when: ubuntu_baseline_cis_demo | bool
+  tags: [linux, security]
+
+# ---------------------------------------------------------------------
+# Identity of the deployment, readable by the reporting role and by the
+# compliance probes.
+# ---------------------------------------------------------------------
+- name: Create the FORGE-AI state directory
+  ansible.builtin.file:
+    path: /etc/forge-ai
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [linux, bootstrap]
+
+- name: Record the applied desired state
+  ansible.builtin.copy:
+    content: "{{ marker | to_nice_json }}\n"
+    dest: /etc/forge-ai/state.json
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    marker:
+      host: "{{ inventory_hostname }}"
+      profile: "{{ forge_host.profile }}"
+      deployment_id: "{{ forge_deployment_id }}"
+      git_commit: "{{ forge_git_commit }}"
+      git_branch: "{{ forge_git_branch }}"
+      applied_at: "{{ ansible_date_time.iso8601 }}"
+      applied_by: "{{ forge_operator }}"
+      trigger: "{{ forge_trigger }}"
+  tags: [linux, bootstrap]
+
+- name: Install the health check command
+  ansible.builtin.template:
+    src: forge-health.sh.j2
+    dest: /usr/local/bin/forge-health
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [linux, validation]
+
+- name: Include the reboot handling
+  ansible.builtin.include_tasks: reboot.yml
+  tags: [linux, bootstrap]
+
+- name: Include the final validation
+  ansible.builtin.include_tasks: validate.yml
+  tags: [linux, validation]

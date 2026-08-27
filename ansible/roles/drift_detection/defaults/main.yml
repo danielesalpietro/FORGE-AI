@@ -1,0 +1,8 @@
+---
+# Where the drift artefacts are written on the control host.
+drift_report_dir: "{{ storage.report_dir }}/drift"
+# Run the read-only compliance probes in addition to check mode.
+drift_run_probes: "{{ drift.compliance_probes_enabled | default(true) }}"
+# Exit non-zero when drift is found. Semaphore marks the task failed,
+# which is what makes a scheduled drift check useful as an alert.
+drift_fail_on_drift: false

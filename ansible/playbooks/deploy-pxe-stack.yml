@@ -1,0 +1,47 @@
+---
+# =====================================================================
+# Deploy the PXE services: network, dnsmasq, iPXE scripts, registry.
+# =====================================================================
+#   make deploy-pxe
+#   ansible-playbook playbooks/deploy-pxe-stack.yml
+#
+# Re-runnable. It does NOT queue a reinstall of a working machine
+# unless -e ipxe_reset_state=true is passed.
+# =====================================================================
+- name: Deploy the PXE and boot services
+  hosts: control_plane
+  gather_facts: true
+  tags: [provisioning, network]
+
+  roles:
+    - role: libvirt_network
+      tags: [network]
+
+    - role: pxe_server
+      tags: [network]
+
+    - role: ipxe_menu
+      tags: [network]
+
+  post_tasks:
+    - name: Summarise the boot path
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+           PXE services ready
+          ==========================================================
+           DHCP/DNS/TFTP : {{ forge_dnsmasq_service }} on {{ provisioning_network.bridge }}
+           Boot server   : {{ forge_boot_base_url }}
+           Entry point   : {{ forge_boot_base_url }}/boot/boot.ipxe
+
+           Per-host dispatch (what each MAC will receive on its next boot):
+          {% for host in forge_hosts %}
+             {{ '%-16s' | format(host.name) }} {{ forge_boot_base_url }}/state/{{ host.mac_address | mac_hyphen }}.ipxe
+          {% endfor %}
+
+           Watch a boot:
+             sudo journalctl -u {{ forge_dnsmasq_service }} -f
+             sudo tail -f {{ storage.log_dir }}/nginx/boot-access.log
+             sudo tcpdump -i {{ provisioning_network.bridge }} -n 'udp port 67 or udp port 68'
+          ==========================================================
+      tags: [always]

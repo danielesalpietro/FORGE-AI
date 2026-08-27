@@ -1,0 +1,10 @@
+---
+# Reset the recorded lifecycle state for every host. Use when starting
+# a fresh deployment; leave false to resume an in-flight one.
+ipxe_reset_state: false
+# States the reset is allowed to clear. A host that is already "ready"
+# is left alone unless ipxe_reset_force is set, so a routine re-run of
+# deploy-pxe-stack.yml cannot accidentally queue a reinstall of a
+# working machine.
+ipxe_reset_states: [new, installing, failed]
+ipxe_reset_force: false

@@ -1,0 +1,27 @@
+---
+# =====================================================================
+# Validate that this host can run the PoC. Changes nothing.
+# =====================================================================
+#   ansible-playbook playbooks/validate-prerequisites.yml
+#   make check
+# =====================================================================
+- name: Validate the control host prerequisites
+  hosts: control_plane
+  gather_facts: true
+  become: false
+  tags: [validation, bootstrap]
+
+  pre_tasks:
+    - name: Show what is being validated
+      ansible.builtin.debug:
+        msg: |
+          Validating {{ inventory_hostname }} for FORGE-AI '{{ deployment.name }}'.
+            targets    : {{ forge_hosts | map(attribute='name') | join(', ') }}
+            network    : {{ provisioning_network.cidr }} on {{ provisioning_network.bridge }}
+            artefacts  : {{ storage.artifacts_dir }}
+          Nothing is created or modified by this playbook.
+      tags: [always]
+
+  roles:
+    - role: prerequisite_validation
+      tags: [validation]

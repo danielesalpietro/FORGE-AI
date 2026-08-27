@@ -1,0 +1,24 @@
+# =====================================================================
+# FORGE-AI :: chrony configuration for {{ inventory_hostname }}
+# Rendered from roles/ubuntu_baseline/templates/chrony-forge.conf.j2
+# Managed state - edits here are drift and will be reverted.
+# =====================================================================
+# Deployment : {{ forge_deployment_id }}
+
+{% for server in provisioning_network.ntp_servers %}
+pool {{ server }} iburst maxsources 4
+{% endfor %}
+
+# The KVM host is always reachable from the provisioning segment, even
+# when forward_mode is 'isolated' and the internet is not. Listing it as
+# a fallback is what keeps a fully air-gapped run from drifting.
+server {{ provisioning_network.gateway }} iburst prefer
+
+# Step the clock on the first three updates if it is more than a second
+# out: a freshly installed VM can start with a badly wrong RTC, and
+# slewing that back would take hours.
+makestep 1.0 3
+
+rtcsync
+leapsectz right/UTC
+logdir /var/log/chrony

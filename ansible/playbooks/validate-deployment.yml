@@ -1,0 +1,88 @@
+---
+# =====================================================================
+# Validate the deployment and write the report.
+# =====================================================================
+#   make validate
+#
+# Three parts:
+#   1. per-host validation (services, policy, health command)
+#   2. an idempotence check -- the baseline is applied a second time in
+#      check mode and any change is reported
+#   3. the deployment report
+# =====================================================================
+- name: Validate the Ubuntu targets
+  hosts: linux
+  gather_facts: true
+  become: true
+  tags: [validation, linux]
+
+  tasks:
+    - name: Run the Ubuntu validation
+      ansible.builtin.include_role:
+        name: ubuntu_baseline
+        tasks_from: validate.yml
+      tags: [validation]
+
+    - name: Record the validation result
+      ansible.builtin.set_fact:
+        forge_validation_result: >-
+          {{ 'passed (' ~ (forge_host_health.checks | default([]) | length) ~ ' checks)'
+             if forge_host_health.status | default('') == 'ok'
+             else 'FAILED: ' ~ (forge_host_health.checks | default([]) | rejectattr('ok')
+                                | map(attribute='name') | join(', ')) }}
+        cacheable: true
+      tags: [always]
+
+- name: Validate the Windows targets
+  hosts: windows
+  gather_facts: false
+  tags: [validation, windows]
+
+  tasks:
+    - name: Run the Windows validation
+      ansible.builtin.include_role:
+        name: windows_baseline
+        tasks_from: validate.yml
+      tags: [validation]
+
+    - name: Record the validation result
+      ansible.builtin.set_fact:
+        forge_validation_result: >-
+          {{ 'passed (' ~ forge_windows_validation.passed ~ '/' ~
+             (forge_windows_validation.probes | length) ~ ' probes)'
+             if (forge_windows_validation.failed | int) == 0
+             else 'FAILED: ' ~ (forge_windows_validation.probes | rejectattr('ok')
+                                | map(attribute='name') | join(', ')) }}
+        cacheable: true
+      tags: [always]
+
+- name: Check that the configuration is idempotent
+  # The requirement is explicit: run the configuration playbooks twice
+  # and report whether the second run produced unexpected changes. This
+  # is that second run, in check mode so it cannot alter anything.
+  hosts: forge_targets
+  gather_facts: false
+  check_mode: true
+  tags: [validation, drift]
+
+  tasks:
+    - name: Re-apply the Ubuntu baseline in check mode
+      ansible.builtin.include_role:
+        name: ubuntu_baseline
+      when: forge_host.os_family == 'linux'
+      tags: [validation]
+
+    - name: Re-apply the Windows baseline in check mode
+      ansible.builtin.include_role:
+        name: windows_baseline
+      when: forge_host.os_family == 'windows'
+      tags: [validation]
+
+- name: Assemble the deployment report
+  hosts: control_plane
+  gather_facts: true
+  tags: [validation, reporting]
+
+  roles:
+    - role: reporting
+      tags: [reporting]

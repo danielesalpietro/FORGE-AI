@@ -1,0 +1,152 @@
+---
+# =====================================================================
+# pxe_server -- DHCP, DNS and TFTP for the provisioning segment
+# =====================================================================
+# Runs a DEDICATED dnsmasq instance bound to the provisioning bridge,
+# not a drop-in under /etc/dnsmasq.d. Two reasons:
+#
+#   1. A drop-in changes the behaviour of whatever dnsmasq the host
+#      already runs -- including, on a desktop, the one NetworkManager
+#      owns. That is exactly the "PXE DHCP on a production LAN" failure
+#      this project warns about.
+#   2. A dedicated unit can be stopped, restarted and destroyed without
+#      touching host networking, which makes teardown honest.
+# =====================================================================
+
+- name: Ensure dnsmasq is installed
+  ansible.builtin.apt:
+    name: dnsmasq
+    state: present
+  become: true
+  tags: [provisioning, network]
+
+- name: Disable the distribution dnsmasq service
+  # The packaged unit binds to every interface. Leaving it enabled next
+  # to the FORGE-AI instance is the two-DHCP-servers problem again.
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    enabled: false
+    state: stopped
+    masked: false
+  become: true
+  failed_when: false
+  register: forge_distro_dnsmasq
+  tags: [provisioning, network]
+
+- name: Report that the distribution dnsmasq was stopped  # noqa: no-handler
+  # Not a handler: stopping a service the host may have been relying on
+  # is worth saying at the moment it happens, not at the end of the run.
+  ansible.builtin.debug:
+    msg: >-
+      The packaged dnsmasq service was stopped and disabled. FORGE-AI runs its own
+      instance ({{ pxe_dnsmasq_unit }}) bound only to {{ provisioning_network.bridge }}.
+      If this host needed the packaged dnsmasq for something else, re-enable it and
+      confirm it is not bound to {{ provisioning_network.bridge }}.
+  when: forge_distro_dnsmasq is changed
+  tags: [provisioning, network]
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: "{{ forge_dnsmasq_config | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [provisioning, network]
+
+- name: Render the dnsmasq configuration
+  ansible.builtin.template:
+    src: dnsmasq/provisioning.conf.j2
+    dest: "{{ forge_dnsmasq_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    # dnsmasq validates its own syntax; a bad file must never reach a
+    # restart, because a dnsmasq that refuses to start looks exactly
+    # like a DHCP-less network from the client's point of view.
+    validate: "{{ pxe_dnsmasq_binary ~ ' --test --conf-file=%s' if pxe_validate_config | bool else omit }}"
+  become: true
+  notify: restart dnsmasq
+  tags: [provisioning, network]
+
+- name: Install the systemd unit for the FORGE-AI dnsmasq instance
+  ansible.builtin.template:
+    src: dnsmasq/forge-dnsmasq.service.j2
+    dest: "/etc/systemd/system/{{ pxe_dnsmasq_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify:
+    - reload systemd
+    - restart dnsmasq
+  tags: [provisioning, network]
+
+- name: Apply pending unit and configuration changes now
+  ansible.builtin.meta: flush_handlers
+  tags: [provisioning, network]
+
+- name: Enable and start the FORGE-AI dnsmasq instance
+  ansible.builtin.systemd_service:
+    name: "{{ pxe_dnsmasq_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  tags: [provisioning, network]
+
+# ---------------------------------------------------------------------
+# Boot binaries
+# ---------------------------------------------------------------------
+- name: Install the iPXE binaries into the TFTP root
+  ansible.builtin.include_tasks: ipxe-assets.yml
+  tags: [provisioning, network, media]
+
+# ---------------------------------------------------------------------
+# Proof that it works
+# ---------------------------------------------------------------------
+- name: Confirm dnsmasq is listening for DHCP on the bridge
+  ansible.builtin.command: "ss -Hlnup sport = :67"
+  become: true
+  changed_when: false
+  register: forge_dnsmasq_listening
+  tags: [provisioning, network, validation]
+
+- name: Assert that dnsmasq answers DHCP
+  ansible.builtin.assert:
+    that:
+      - "'dnsmasq' in forge_dnsmasq_listening.stdout"
+    fail_msg: |
+      Nothing is listening on udp/67 after starting {{ pxe_dnsmasq_unit }}.
+      Look at the reason:
+        sudo systemctl status {{ pxe_dnsmasq_unit }}
+        sudo journalctl -u {{ pxe_dnsmasq_unit }} -n 50 --no-pager
+        sudo dnsmasq --test --conf-file={{ forge_dnsmasq_config }}
+    success_msg: "dnsmasq is serving DHCP on {{ provisioning_network.bridge }}"
+  tags: [provisioning, network, validation]
+
+- name: Confirm TFTP is reachable on the bridge address
+  ansible.builtin.command: "ss -Hlnup sport = :69"
+  become: true
+  changed_when: false
+  register: forge_tftp_listening
+  tags: [provisioning, network, validation]
+
+- name: Assert that TFTP answers
+  ansible.builtin.assert:
+    that:
+      - forge_tftp_listening.stdout | length > 0
+    fail_msg: >-
+      No TFTP listener on udp/69. The firmware PXE ROM fetches the first-stage
+      iPXE binary over TFTP, so UEFI clients will fail with "PXE-E18: server
+      response timeout" without it.
+    success_msg: "TFTP is serving {{ storage.tftp_root }}"
+  tags: [provisioning, network, validation]
+
+- name: Publish the PXE facts
+  ansible.builtin.set_fact:
+    forge_pxe_ready: true
+    cacheable: true
+  tags: [always, provisioning, network]

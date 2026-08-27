@@ -6,7 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "environment",
+    "deployment",
     "provisioning_network",
     "storage",
     "media",
@@ -46,7 +46,7 @@
     }
   },
   "properties": {
-    "environment": {
+    "deployment": {
       "type": "object",
       "additionalProperties": false,
       "required": [

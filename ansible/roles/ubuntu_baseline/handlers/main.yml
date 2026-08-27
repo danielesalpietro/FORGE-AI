@@ -1,0 +1,30 @@
+---
+- name: Restart sshd
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: restarted
+  become: true
+  listen: restart sshd
+
+- name: Restart chrony
+  ansible.builtin.systemd_service:
+    name: chrony
+    state: restarted
+  become: true
+  listen: restart chrony
+
+- name: Restart auditd
+  # On Ubuntu 24.04 auditd.service accepts a normal restart. (Some
+  # RHEL-family builds set RefuseManualStop=yes and need `service auditd
+  # restart` instead -- worth knowing if this role is ever ported.)
+  ansible.builtin.systemd_service:
+    name: auditd
+    state: restarted
+  become: true
+  listen: restart auditd
+
+- name: Reload ufw
+  ansible.builtin.command: ufw reload
+  become: true
+  changed_when: true
+  listen: reload ufw

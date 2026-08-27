@@ -1,0 +1,183 @@
+---
+# =====================================================================
+# Provision the Ubuntu target from bare disk to a reachable SSH host.
+# =====================================================================
+#   make provision-ubuntu
+#
+# Renders the seed, boots the VM, waits for the installer to report
+# "installed", re-points the boot order at the local disk, waits for
+# SSH, and purges the seed.
+# =====================================================================
+- name: Prepare and boot the Ubuntu target
+  hosts: control_plane
+  gather_facts: true
+  tags: [provisioning, linux]
+
+  roles:
+    - role: ubuntu_media
+      tags: [media]
+    - role: ubuntu_autoinstall
+      tags: [provisioning]
+    - role: ipxe_menu
+      vars:
+        ipxe_reset_state: true
+      tags: [provisioning]
+
+  tasks:
+    - name: Select the Ubuntu targets
+      ansible.builtin.set_fact:
+        forge_linux_targets: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+      tags: [always]
+
+    - name: Ensure the Ubuntu domains are running and network-booting
+      ansible.builtin.include_role:
+        name: vm_lifecycle
+      vars:
+        vm_lifecycle_state: running
+        forge_boot_target: network
+        forge_hosts: "{{ forge_linux_targets }}"
+      tags: [provisioning]
+
+    - name: Wait for the installation to complete
+      # Polls the state service rather than the VM. The installer's own
+      # late-command reports "installed", so this is the installer
+      # telling us it finished, not us guessing from a port being open.
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/state/{{ item.mac_address | mac_hyphen }}"
+        method: GET
+        return_content: true
+        status_code: [200]
+      register: forge_ubuntu_install_wait
+      until: >-
+        forge_ubuntu_install_wait.json.state in ['installed', 'configuring', 'ready', 'failed']
+      retries: "{{ (forge_wait_install_timeout | int / forge_wait_poll_interval | int) | round | int }}"
+      delay: "{{ forge_wait_poll_interval }}"
+      loop: "{{ forge_linux_targets }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: false
+      tags: [provisioning]
+
+    - name: Report the installation outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.name }}: state={{ item.json.state | default('unknown') }}
+          after {{ item.json.attempts | default(0) }} attempt(s)
+      loop: "{{ forge_ubuntu_install_wait.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      tags: [provisioning]
+
+    - name: Fail on an installation that did not complete
+      ansible.builtin.fail:
+        msg: |
+          Ubuntu installation did not complete on:
+          {% for result in forge_ubuntu_install_wait.results %}
+          {% if result.json.state | default('unknown') not in ['installed', 'configuring', 'ready'] %}
+            {{ result.item.name }} -- state '{{ result.json.state | default('unknown') }}' after
+            {{ result.json.attempts | default(0) }} of {{ pxe.max_install_attempts }} attempts
+          {% endif %}
+          {% endfor %}
+
+          Where to look:
+            virsh console <domain>                              the live installer
+            sudo tail -50 {{ storage.log_dir }}/nginx/boot-access.log   did it fetch the seed?
+            ls {{ storage.log_dir }}/guests/                     installer logs it uploaded
+            curl -s {{ forge_boot_base_url }}/api/state | jq     full state history
+
+          A state of 'installing' with attempts at the limit means the reinstall-loop
+          guard stopped it. docs/TROUBLESHOOTING.md, "VM restarts into installation again".
+      when: >-
+        forge_ubuntu_install_wait.results
+        | rejectattr('json.state', 'in', ['installed', 'configuring', 'ready'])
+        | list | length > 0
+      tags: [provisioning]
+
+    - name: Re-point the installed hosts at their local disk
+      ansible.builtin.include_role:
+        name: vm_lifecycle
+        tasks_from: set-boot-order.yml
+      vars:
+        forge_boot_order_hosts: >-
+          {{ forge_ubuntu_install_wait.results
+             | selectattr('json.state', 'in', ['installed', 'configuring', 'ready'])
+             | map(attribute='item') | list }}
+      tags: [provisioning]
+
+    - name: Wait for SSH on every installed host
+      ansible.builtin.wait_for:
+        host: "{{ item.item.ip_address }}"
+        port: 22
+        state: started
+        timeout: "{{ forge_wait_ssh_timeout }}"
+        delay: 10
+      loop: "{{ forge_ubuntu_install_wait.results }}"
+      loop_control:
+        label: "{{ item.item.name }} ({{ item.item.ip_address }})"
+      when: item.json.state | default('') in ['installed', 'configuring', 'ready']
+      tags: [provisioning, validation]
+
+    - name: Purge the autoinstall seed
+      ansible.builtin.include_role:
+        name: ubuntu_autoinstall
+        tasks_from: purge.yml
+      vars:
+        forge_installed_linux_hosts: >-
+          {{ forge_ubuntu_install_wait.results
+             | selectattr('json.state', 'in', ['installed', 'configuring', 'ready'])
+             | map(attribute='item.name') | list }}
+      tags: [provisioning, security]
+
+- name: Confirm Ansible can reach the Ubuntu targets
+  hosts: linux
+  gather_facts: false
+  tags: [provisioning, linux, validation]
+
+  tasks:
+    - name: Wait for the SSH service to accept a connection
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ forge_wait_ssh_timeout }}"
+        delay: 5
+        sleep: 10
+      tags: [provisioning, validation]
+
+    - name: Ping over SSH
+      ansible.builtin.ping:
+      register: forge_ubuntu_ping
+      tags: [provisioning, validation]
+
+    - name: Gather the facts
+      ansible.builtin.setup:
+      tags: [provisioning, validation]
+
+    - name: Report the reachable host
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} is reachable over SSH as {{ ansible_user }}:
+          {{ ansible_distribution }} {{ ansible_distribution_version }},
+          kernel {{ ansible_kernel }}, {{ ansible_processor_vcpus }} vCPU,
+          {{ ansible_memtotal_mb }} MB.
+      tags: [provisioning, validation]
+
+    - name: Advance the lifecycle state to 'configuring'
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/state/{{ forge_mac_hyphen }}"
+        method: POST
+        body_format: json
+        body:
+          state: configuring
+          source: ansible-provision-ubuntu
+          host: "{{ inventory_hostname }}"
+        headers: "{{ {'X-Forge-Token': forge_state_token} if forge_state_token | length > 0 else {} }}"
+        status_code: [200, 409]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      tags: [provisioning]
+
+    - name: Record the provisioning result
+      ansible.builtin.set_fact:
+        forge_provisioning_result: "installed and reachable over SSH"
+        cacheable: true
+      tags: [always]

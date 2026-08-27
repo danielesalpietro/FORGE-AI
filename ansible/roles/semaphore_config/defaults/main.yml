@@ -1,0 +1,73 @@
+---
+semaphore_api_url: "http://127.0.0.1:{{ control_plane.semaphore_http_port }}/api"
+semaphore_wait_timeout: 300
+semaphore_manage_project: true
+semaphore_manage_templates: true
+# The repository Semaphore clones. Gitea is reached over the container
+# network, so this is the internal address, not the proxied one.
+semaphore_repo_url: "http://gitea:3000/{{ gitops.gitea_org }}/{{ gitops.gitea_repo }}.git"
+semaphore_repo_branch: "{{ gitops.default_branch }}"
+semaphore_inventory_path: "ansible/inventories/poc"
+semaphore_playbook_dir: "ansible/playbooks"
+
+# ---------------------------------------------------------------------
+# Workflow stages. Order is the deployment order; `destructive` splits
+# the destroy workflow away from everything else in the UI.
+# ---------------------------------------------------------------------
+semaphore_templates:
+  - name: "01 Validate prerequisites"
+    playbook: validate-prerequisites.yml
+    description: "Read-only host checks. Safe to run at any time."
+    destructive: false
+  - name: "02 Deploy provisioning services"
+    playbook: deploy-pxe-stack.yml
+    description: "libvirt network, dnsmasq, iPXE scripts, host registry."
+    destructive: false
+  - name: "03 Prepare Ubuntu media"
+    playbook: prepare-ubuntu-media.yml
+    description: "Download, verify and unpack the Ubuntu Server ISO."
+    destructive: false
+  - name: "04 Prepare Windows media"
+    playbook: prepare-windows-media.yml
+    description: "Validate the operator-supplied ISO, inspect the WIM, build WinPE."
+    destructive: false
+  - name: "05 Create target VMs"
+    playbook: create-vms.yml
+    description: "Define and start the libvirt domains."
+    destructive: false
+  - name: "06 Provision Ubuntu"
+    playbook: provision-ubuntu.yml
+    description: "Network boot, unattended install, wait for SSH."
+    destructive: false
+  - name: "07 Provision Windows"
+    playbook: provision-windows.yml
+    description: "WinPE boot, unattended install, wait for WinRM."
+    destructive: false
+  - name: "08 Configure Ubuntu"
+    playbook: configure-targets.yml
+    description: "Apply the Ubuntu baseline."
+    limit: linux
+    destructive: false
+  - name: "09 Configure Windows"
+    playbook: configure-targets.yml
+    description: "Apply the Windows baseline."
+    limit: windows
+    destructive: false
+  - name: "10 Validate deployment"
+    playbook: validate-deployment.yml
+    description: "Smoke tests, idempotence check and the deployment report."
+    destructive: false
+  - name: "11 Detect drift"
+    playbook: detect-drift.yml
+    description: "Check mode plus read-only compliance probes. Changes nothing."
+    destructive: false
+  - name: "12 Reconcile drift"
+    playbook: reconcile.yml
+    description: "Reapply the desired state. Review the drift report first."
+    destructive: false
+  - name: "99 DESTROY the PoC"
+    playbook: destroy-poc.yml
+    description: >-
+      Removes the VMs, their disks, the network and the prepared media.
+      Requires confirm_destroy to be set explicitly.
+    destructive: true

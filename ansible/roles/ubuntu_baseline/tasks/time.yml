@@ -1,0 +1,66 @@
+---
+# =====================================================================
+# Time synchronisation
+# =====================================================================
+# Clock skew breaks Kerberos, TLS validation and log correlation, and it
+# makes a deployment report's timeline meaningless. chrony rather than
+# systemd-timesyncd because it reports its sources, which makes the
+# compliance probe meaningful rather than a guess.
+# =====================================================================
+
+- name: Stop and disable systemd-timesyncd
+  # Two NTP clients on one host fight over the clock. chrony wins here.
+  ansible.builtin.systemd_service:
+    name: systemd-timesyncd
+    state: stopped
+    enabled: false
+  become: true
+  failed_when: false
+  tags: [linux, bootstrap]
+
+- name: Configure chrony
+  ansible.builtin.template:
+    src: chrony-forge.conf.j2
+    dest: /etc/chrony/conf.d/10-forge-ai.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: restart chrony
+  tags: [linux, bootstrap]
+
+- name: Enable and start chrony
+  ansible.builtin.systemd_service:
+    name: chrony
+    enabled: true
+    state: started
+  become: true
+  tags: [linux, bootstrap]
+
+- name: Set the timezone
+  community.general.timezone:
+    name: "{{ deployment.timezone }}"
+  become: true
+  tags: [linux, bootstrap]
+
+- name: Apply the chrony changes now
+  ansible.builtin.meta: flush_handlers
+  tags: [linux, bootstrap]
+
+- name: Wait for the clock to synchronise
+  ansible.builtin.command: chronyc waitsync 10 0.1
+  become: true
+  changed_when: false
+  failed_when: false
+  register: forge_chrony_sync
+  tags: [linux, bootstrap, validation]
+
+- name: Report the synchronisation result
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Clock synchronised.' if forge_chrony_sync.rc == 0
+         else 'Clock NOT yet synchronised after 10 attempts. On an isolated
+               network with forward_mode=isolated this is expected -- there is no
+               route to ' ~ (provisioning_network.ntp_servers | join(', ')) ~ '.
+               Point ntp_servers at a reachable server, or accept the skew.' }}
+  tags: [linux, bootstrap, validation]

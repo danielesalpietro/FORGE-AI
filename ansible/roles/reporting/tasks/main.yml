@@ -1,0 +1,248 @@
+---
+# =====================================================================
+# reporting -- the deployment record
+# =====================================================================
+# Runs once, on the control host, at the end of site.yml. Everything it
+# needs was published as cacheable facts by the roles that did the work,
+# so this role never has to re-measure anything and can therefore report
+# on a run that partially failed.
+# =====================================================================
+
+- name: Create the report directory
+  ansible.builtin.file:
+    path: "{{ reporting_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [reporting, validation]
+
+- name: Read the final lifecycle state of every host
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/api/state/{{ item.mac_address | mac_hyphen }}"
+    method: GET
+    return_content: true
+    status_code: [200]
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_report_states
+  changed_when: false
+  failed_when: false
+  tags: [reporting, validation]
+
+- name: Assemble the per-host report entries
+  ansible.builtin.set_fact:
+    forge_report_hosts: >-
+      {{ forge_report_hosts | default([]) + [{
+           'name': item.name,
+           'os': ('Ubuntu Server ' ~ media.ubuntu.version) if item.os_family == 'linux'
+                 else (forge_windows_media.selected_edition | default('Windows Server')),
+           'profile': item.profile,
+           'ip_address': item.ip_address,
+           'mac_address': item.mac_address,
+           'firmware': item.firmware | default('uefi'),
+           'vcpu': item.vcpu,
+           'memory_mb': item.memory_mb,
+           'disk_gb': item.disk_gb,
+           'boot_state': (forge_report_states.results | selectattr('item.name', 'eq', item.name)
+                          | map(attribute='json.state') | first | default('unknown')),
+           'install_attempts': (forge_report_states.results | selectattr('item.name', 'eq', item.name)
+                                | map(attribute='json.attempts') | first | default(0)),
+           'provisioning_result': hostvars[item.name].forge_provisioning_result | default('not attempted'),
+           'configuration_result': hostvars[item.name].forge_configuration_result | default('not attempted'),
+           'validation_result': hostvars[item.name].forge_validation_result | default('not attempted'),
+           'status': hostvars[item.name].forge_host_status | default('unknown'),
+           'duration_seconds': hostvars[item.name].forge_host_duration | default(0),
+           'failed_tasks': hostvars[item.name].forge_failed_tasks | default([]),
+           'facts': {
+             'kernel': hostvars[item.name].ansible_kernel | default(''),
+             'distribution': hostvars[item.name].ansible_distribution | default(''),
+             'distribution_version': hostvars[item.name].ansible_distribution_version | default(''),
+             'processor_count': hostvars[item.name].ansible_processor_vcpus | default(''),
+             'memory_mb': hostvars[item.name].ansible_memtotal_mb | default(''),
+             'uptime_seconds': hostvars[item.name].ansible_uptime_seconds | default('')
+           }
+         }] }}
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [reporting, validation]
+
+- name: Assemble the deployment report
+  ansible.builtin.set_fact:
+    report:
+      deployment_id: "{{ forge_deployment_id }}"
+      environment: "{{ deployment.name }}"
+      git_commit: "{{ forge_git_commit }}"
+      git_branch: "{{ forge_git_branch }}"
+      started_at: "{{ forge_started_at | default(ansible_date_time.iso8601) }}"
+      finished_at: "{{ ansible_date_time.iso8601 }}"
+      duration_seconds: >-
+        {{ ((ansible_date_time.epoch | int) - (forge_started_epoch | default(ansible_date_time.epoch) | int)) }}
+      operator: "{{ forge_operator }}"
+      trigger: "{{ forge_trigger }}"
+      hosts: "{{ forge_report_hosts | default([]) }}"
+      media: "{{ forge_report_media }}"
+      versions: "{{ forge_component_versions | default({}) }}"
+      logs: "{{ forge_report_logs }}"
+      prerequisites: "{{ forge_prereq_result | default({}) }}"
+      semaphore_task_id: "{{ reporting_semaphore_task_id }}"
+      semaphore_task_url: >-
+        {{ (reporting_semaphore_url ~ '/project/' ~ reporting_semaphore_project_id
+            ~ '/history?t=' ~ reporting_semaphore_task_id)
+           if reporting_semaphore_url | length > 0 and reporting_semaphore_task_id | length > 0
+           else '' }}
+      json_path: "{{ reporting_dir }}/deployment-{{ forge_deployment_id }}.json"
+      status: >-
+        {{ 'success'
+           if (forge_report_hosts | default([]) | rejectattr('status', 'eq', 'success') | list | length == 0)
+           else 'failed' }}
+  vars:
+    forge_report_media:
+      - name: "Ubuntu Server ISO"
+        path: "{{ forge_ubuntu_media.iso_path | default(media.ubuntu.iso_path) }}"
+        sha256: "{{ forge_ubuntu_media.sha256 | default('not recorded') }}"
+      - name: "Windows Server ISO (operator supplied)"
+        path: "{{ forge_windows_media.iso_path | default(media.windows.iso_path) | default('not supplied') }}"
+        sha256: "{{ forge_windows_media.sha256 | default('not recorded') }}"
+      - name: "VirtIO drivers"
+        path: "{{ media.windows.virtio.iso_path }}"
+        sha256: "{{ forge_virtio_verified.stat.checksum | default('not recorded') }}"
+    forge_report_logs:
+      - component: dnsmasq
+        location: "{{ storage.log_dir }}/dnsmasq.log"
+        hint: "also: journalctl -u {{ forge_dnsmasq_service }}"
+      - component: "boot server (nginx)"
+        location: "{{ storage.log_dir }}/nginx/boot-access.log"
+        hint: "every PXE fetch appears here; a 404 is the usual first clue"
+      - component: "provisioning state service"
+        location: "docker compose logs state"
+        hint: "state transitions and the reinstall-loop guard"
+      - component: "guest installer logs"
+        location: "{{ storage.log_dir }}/guests/"
+        hint: "uploaded by the Ubuntu error-commands and by SetupComplete.cmd"
+      - component: "Ubuntu installer (on target)"
+        location: "/var/log/installer/ and /var/log/forge-ai-installer/"
+        hint: "subiquity-server-debug.log has the autoinstall detail"
+      - component: "Windows Setup (on target)"
+        location: 'C:\Windows\Panther\setupact.log and C:\ProgramData\forge-ai\setupcomplete.log'
+        hint: >-
+          Panther holds the unattend processing;
+          setupcomplete.log holds the WinRM bootstrap.
+      - component: Ansible
+        location: "{{ storage.log_dir }}/ansible.log"
+        hint: "per-task timings come from the profile_tasks callback"
+      - component: Semaphore
+        location: "docker compose logs semaphore"
+        hint: "the task history in the UI is the authoritative audit trail"
+      - component: "libvirt / QEMU"
+        location: "/var/log/libvirt/qemu/<domain>.log"
+        hint: "boot order and device errors surface here"
+  tags: [reporting, validation]
+
+- name: Write the machine-readable report
+  ansible.builtin.copy:
+    content: "{{ report | to_nice_json }}\n"
+    dest: "{{ report.json_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: "'json' in reporting_formats"
+  tags: [reporting, validation]
+
+- name: Write the human-readable report
+  ansible.builtin.template:
+    src: report/deployment-report.md.j2
+    dest: "{{ reporting_dir }}/deployment-{{ forge_deployment_id }}.md"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: "'markdown' in reporting_formats"
+  tags: [reporting, validation]
+
+- name: Write the HTML report
+  ansible.builtin.template:
+    src: report/deployment-report.html.j2
+    dest: "{{ reporting_dir }}/deployment-{{ forge_deployment_id }}.html"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: "'html' in reporting_formats"
+  tags: [reporting, validation]
+
+- name: Update the latest-report symlinks
+  ansible.builtin.file:
+    src: "{{ reporting_dir }}/deployment-{{ forge_deployment_id }}.{{ item }}"
+    dest: "{{ reporting_dir }}/latest.{{ item }}"
+    state: link
+    force: true
+  become: true
+  vars:
+    forge_report_suffixes: >-
+      {{ (['json'] if 'json' in reporting_formats else [])
+         + (['md'] if 'markdown' in reporting_formats else [])
+         + (['html'] if 'html' in reporting_formats else []) }}
+  loop: "{{ forge_report_suffixes }}"
+  failed_when: false
+  tags: [reporting, validation]
+
+- name: List the existing reports
+  ansible.builtin.find:
+    paths: "{{ reporting_dir }}"
+    patterns: "deployment-*.json"
+    file_type: file
+  become: true
+  register: forge_existing_reports
+  tags: [reporting]
+
+- name: Prune the oldest reports beyond the retention limit
+  ansible.builtin.file:
+    path: "{{ item.path | regex_replace('\\.json$', '') }}{{ suffix }}"
+    state: absent
+  become: true
+  loop: "{{ forge_reports_to_prune }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    suffix: ".json"
+    # Oldest first, keep the newest `reporting_retain`, prune the rest.
+    forge_reports_to_prune: >-
+      {{ (forge_existing_reports.files | sort(attribute='mtime'))[0:
+         (forge_existing_reports.files | length) - (reporting_retain | int)] }}
+  when: forge_existing_reports.files | length > (reporting_retain | int)
+  tags: [reporting]
+
+- name: Print the report summary
+  ansible.builtin.debug:
+    msg: |
+      ==========================================================
+       FORGE-AI deployment {{ report.deployment_id }} -- {{ report.status | upper }}
+      ==========================================================
+       commit    : {{ report.git_commit }}
+       branch    : {{ report.git_branch }}
+       operator  : {{ report.operator }}  (trigger: {{ report.trigger }})
+       duration  : {{ report.duration_seconds | duration_human }}
+
+      {% for host in report.hosts %}
+       {{ '%-16s' | format(host.name) }} {{ host.status | upper }}
+           {{ host.os }} at {{ host.ip_address }}
+           boot state {{ host.boot_state }} after {{ host.install_attempts }} attempt(s)
+           provision={{ host.provisioning_result }} configure={{ host.configuration_result }} validate={{ host.validation_result }}
+      {% endfor %}
+
+       Reports:
+         {{ reporting_dir }}/latest.md
+         {{ reporting_dir }}/latest.json
+      {% if 'html' in reporting_formats %}
+         {{ reporting_dir }}/latest.html
+      {% endif %}
+      {% if report.semaphore_task_url %}
+         {{ report.semaphore_task_url }}
+      {% endif %}
+      ==========================================================
+  tags: [reporting, validation]

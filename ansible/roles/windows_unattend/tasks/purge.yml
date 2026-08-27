@@ -1,0 +1,52 @@
+---
+# =====================================================================
+# Remove the rendered answer file after a successful installation
+# =====================================================================
+# Autounattend.xml holds the administrator password in a reversible
+# encoding. Once Setup has consumed it there is no reason to keep
+# serving it, so the exposure window ends here.
+#
+# SetupComplete.cmd and Configure-WinRM.ps1 are deliberately KEPT: they
+# carry no credential, and having them available makes the recovery
+# procedure in docs/TROUBLESHOOTING.md ("WinRM listener unavailable")
+# possible without re-rendering anything.
+# =====================================================================
+
+- name: Remove the answer file for installed hosts
+  ansible.builtin.file:
+    path: "{{ storage.http_root }}/windows/{{ item }}/Autounattend.xml"
+    state: absent
+  become: true
+  loop: "{{ forge_installed_windows_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when: windows_unattend_purge | bool
+  tags: [windows, security]
+
+- name: Record that the answer file was purged
+  ansible.builtin.copy:
+    content: |
+      Autounattend.xml for this host was removed at {{ ansible_date_time.iso8601 }}
+      after the host reported state=installed.
+
+      Deployment : {{ forge_deployment_id }}
+      Commit     : {{ forge_git_commit }}
+
+      It contained the local administrator password in Windows'
+      Base64(UTF-16LE(password + "AdministratorPassword")) encoding, which is
+      reversible. The exposure window was: render -> installation complete,
+      on the isolated provisioning segment only.
+
+      To reinstall this host, re-render it:
+        ansible-playbook playbooks/prepare-windows-media.yml
+        ansible-playbook playbooks/provision-windows.yml -e ipxe_reset_state=true
+    dest: "{{ storage.http_root }}/windows/{{ item }}/PURGED.txt"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_installed_windows_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when: windows_unattend_purge | bool
+  tags: [windows, security]

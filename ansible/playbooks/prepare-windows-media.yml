@@ -1,0 +1,53 @@
+---
+# =====================================================================
+# Validate the operator-supplied Windows media and build WinPE.
+# =====================================================================
+#   make prepare-windows-media
+#
+# Ends cleanly when no Windows host is configured, and fails with the
+# acquisition procedure when one is configured but the ISO is absent.
+# =====================================================================
+- name: Prepare the Windows Server media
+  hosts: control_plane
+  gather_facts: true
+  tags: [media, windows]
+
+  roles:
+    - role: windows_media
+      tags: [media]
+
+    - role: windows_winpe
+      tags: [media]
+
+    - role: windows_unattend
+      tags: [media, provisioning]
+
+  post_tasks:
+    - name: Restart the SMB export so it sees the extracted media
+      community.docker.docker_compose_v2:
+        project_src: "{{ forge_repo_root }}/compose"
+        files: [docker-compose.yml]
+        env_files: ["{{ forge_compose_env_file }}"]
+        profiles: [windows]
+        services: [winmedia]
+        state: restarted
+      become: true
+      failed_when: false
+      tags: [media]
+
+    - name: Confirm the SMB export answers
+      ansible.builtin.command: "smbclient -N -L //{{ provisioning_network.gateway }}"
+      changed_when: false
+      failed_when: false
+      register: forge_smb_check
+      tags: [media, validation]
+
+    - name: Report the SMB export state
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'SMB export reachable: ' ~ (forge_smb_check.stdout_lines | select('search', 'winmedia|virtio') | join('; '))
+             if forge_smb_check.rc == 0
+             else 'smbclient could not list //' ~ provisioning_network.gateway ~ '. WinPE fetches
+                   install.wim over SMB, so this must work before provisioning Windows.
+                   Check: docker compose --profile windows ps winmedia' }}
+      tags: [media, validation]

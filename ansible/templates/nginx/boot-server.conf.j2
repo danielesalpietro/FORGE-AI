@@ -92,12 +92,12 @@ server {
     location = /healthz {
         access_log off;
         default_type application/json;
-        return 200 '{"status":"ok","component":"forge-boot-server","environment":"{{ environment.name }}"}';
+        return 200 '{"status":"ok","component":"forge-boot-server","environment":"{{ deployment.name }}"}';
     }
 
     location = / {
         default_type text/plain;
-        return 200 "FORGE-AI boot server ({{ environment.name }})\nSee /healthz, /state/, /api/state\n";
+        return 200 "FORGE-AI boot server ({{ deployment.name }})\nSee /healthz, /state/, /api/state\n";
     }
 
     # Everything not explicitly exposed above is denied rather than

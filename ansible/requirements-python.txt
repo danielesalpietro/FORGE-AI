@@ -1,0 +1,31 @@
+# =====================================================================
+# FORGE-AI :: Python requirements for the Ansible control node
+# =====================================================================
+#   python3 -m pip install -r ansible/requirements-python.txt
+# The bootstrap script installs these into a virtual environment at
+# .venv/ so nothing is written to the system Python.
+# =====================================================================
+
+ansible-core>=2.17,<2.20
+
+# WinRM transport for ansible.windows. pywinrm[credssp] is deliberately
+# NOT installed: CredSSP is disabled on the targets.
+pywinrm>=0.4.3,<0.6
+
+# PSRP transport (community.general.psrp connection plugin).
+pypsrp>=0.8.1,<1.1
+
+# libvirt bindings for community.libvirt.
+libvirt-python>=10.0.0
+
+# Configuration validation and template rendering used by
+# scripts/validate-config.py and the test suite.
+jsonschema>=4.21,<5
+PyYAML>=6.0,<7
+Jinja2>=3.1.4,<4
+
+# Linting and tests (also installed in CI).
+ansible-lint>=24.7,<26
+yamllint>=1.35,<2
+pytest>=8.2,<9
+lxml>=5.2,<7

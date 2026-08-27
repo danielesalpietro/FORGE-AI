@@ -1,0 +1,18 @@
+---
+windows_ui_language: en-US
+windows_system_locale: en-US
+windows_user_locale: en-US
+windows_input_locale: "0409:00000409"
+windows_timezone: "UTC"
+windows_registered_owner: "FORGE-AI PoC"
+windows_registered_org: "FORGE-AI"
+windows_esp_size_mb: 260
+windows_msr_size_mb: 16
+winrm_cert_valid_years: 2
+winrm_max_timeout_ms: 1800000
+winrm_max_memory_mb: 1024
+winrm_max_shells: 30
+# Remove the rendered answer file once the host reports "installed".
+windows_unattend_purge: "{{ security.purge_answer_files_after_install | default(true) }}"
+# Attach the VirtIO ISO as a CD-ROM as a fallback driver source.
+windows_attach_virtio_cdrom: false

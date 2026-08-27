@@ -1,0 +1,82 @@
+---
+# =====================================================================
+# Final validation
+# =====================================================================
+# Read-only checks that re-read the system rather than trusting the
+# "changed" status of earlier tasks. This matters more on Windows than
+# on Linux: several modules here run with check_mode: false because the
+# underlying module has no check-mode support, so their reported status
+# is not evidence of anything during a drift run.
+# =====================================================================
+
+- name: Confirm WinRM is reachable
+  ansible.windows.win_ping:
+  register: forge_win_ping
+  tags: [windows, validation]
+
+- name: Collect the compliance evidence
+  ansible.windows.win_shell: "{{ item.command }}"
+  register: forge_win_evidence
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  loop: "{{ forge_windows_probes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows, validation]
+
+- name: Compare every probe against the desired state
+  ansible.builtin.set_fact:
+    forge_windows_probe_results: >-
+      {{ forge_windows_probe_results | default([]) + [{
+           'name': item.item.name,
+           'expected': item.item.expect | string | trim,
+           'observed': item.stdout | default('') | trim,
+           'ok': (item.stdout | default('') | trim | lower)
+                 == (item.item.expect | string | trim | lower)
+         }] }}
+  loop: "{{ forge_win_evidence.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  tags: [windows, validation]
+
+- name: Report each compliance probe
+  ansible.builtin.debug:
+    msg: >-
+      {{ '[ok]  ' if item.ok else '[FAIL]' }} {{ item.name }}:
+      expected '{{ item.expected }}', observed '{{ item.observed | default('(no output)') }}'
+  loop: "{{ forge_windows_probe_results | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows, validation]
+
+- name: Fail when a compliance probe disagrees with the desired state
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} does not match the desired state
+      ({{ forge_windows_probe_results | rejectattr('ok') | list | length }} of
+      {{ forge_windows_probe_results | length }} probes failed):
+
+      {% for probe in forge_windows_probe_results | rejectattr('ok') %}
+        {{ probe.name }}: expected '{{ probe.expected }}', observed '{{ probe.observed | default('(no output)') }}'
+      {% endfor %}
+
+      These are read-only probes, so they reflect the machine's real state
+      rather than a module's self-reported result. See docs/OPERATIONS.md,
+      "check-mode limitations".
+  when:
+    - not ansible_check_mode
+    - forge_windows_probe_results | default([]) | rejectattr('ok') | list | length > 0
+  tags: [windows, validation]
+
+- name: Publish the validation result
+  ansible.builtin.set_fact:
+    forge_windows_validation:
+      host: "{{ inventory_hostname }}"
+      checked_at: "{{ ansible_date_time.iso8601 | default('unknown') }}"
+      winrm: "{{ 'reachable' if forge_win_ping is succeeded else 'unreachable' }}"
+      passed: "{{ forge_windows_probe_results | default([]) | selectattr('ok') | list | length }}"
+      failed: "{{ forge_windows_probe_results | default([]) | rejectattr('ok') | list | length }}"
+      probes: "{{ forge_windows_probe_results | default([]) }}"
+    cacheable: true
+  tags: [windows, validation]

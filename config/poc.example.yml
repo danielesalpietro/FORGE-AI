@@ -11,7 +11,7 @@
 #   make validate           (schema + semantic checks + template render)
 # =====================================================================
 
-environment:
+deployment:
   name: poc
   domain: poc.local
   timezone: Europe/Rome

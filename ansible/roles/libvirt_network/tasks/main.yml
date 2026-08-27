@@ -1,0 +1,133 @@
+---
+# =====================================================================
+# libvirt_network -- the isolated provisioning segment
+# =====================================================================
+# The network is defined WITHOUT DHCP and WITHOUT DNS on purpose.
+# libvirt only spawns its own dnsmasq when a network needs one of them;
+# with neither, it creates the bridge and the NAT rules and stops there.
+# That leaves DHCP entirely to the FORGE-AI dnsmasq instance, which
+# needs architecture-aware, tag-based PXE options that libvirt's network
+# XML cannot express.
+#
+# Two DHCP servers on one bridge is the classic cause of intermittent
+# PXE failure, so this separation is not a stylistic choice.
+# =====================================================================
+
+- name: Gather the currently defined libvirt networks
+  community.libvirt.virt_net:
+    command: list_nets
+    uri: qemu:///system
+  become: true
+  register: forge_existing_networks
+  changed_when: false
+  tags: [provisioning, network]
+
+- name: Render the provisioning network XML
+  ansible.builtin.template:
+    src: libvirt/network.xml.j2
+    dest: "{{ storage.artifacts_dir }}/config/{{ provisioning_network.name }}.xml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "xmllint --noout %s"
+  become: true
+  register: forge_network_xml
+  tags: [provisioning, network]
+
+- name: Stop the existing network before recreating it
+  # Only reached on an explicit request. Recreating a live network
+  # disconnects every guest attached to it.
+  community.libvirt.virt_net:
+    name: "{{ provisioning_network.name }}"
+    state: inactive
+    uri: qemu:///system
+  become: true
+  when:
+    - libvirt_network_force_recreate | bool
+    - provisioning_network.name in forge_existing_networks.list_nets
+  tags: [provisioning, network, destroy]
+
+- name: Undefine the existing network before recreating it
+  community.libvirt.virt_net:
+    name: "{{ provisioning_network.name }}"
+    command: undefine
+    uri: qemu:///system
+  become: true
+  when:
+    - libvirt_network_force_recreate | bool
+    - provisioning_network.name in forge_existing_networks.list_nets
+  tags: [provisioning, network, destroy]
+
+- name: Define the provisioning network
+  community.libvirt.virt_net:
+    name: "{{ provisioning_network.name }}"
+    command: define
+    xml: "{{ lookup('ansible.builtin.file', storage.artifacts_dir ~ '/config/' ~ provisioning_network.name ~ '.xml') }}"
+    uri: qemu:///system
+  become: true
+  when: provisioning_network.name not in forge_existing_networks.list_nets or libvirt_network_force_recreate | bool
+  tags: [provisioning, network]
+
+- name: Start the provisioning network and mark it autostart
+  community.libvirt.virt_net:
+    name: "{{ provisioning_network.name }}"
+    state: active
+    autostart: true
+    uri: qemu:///system
+  become: true
+  tags: [provisioning, network]
+
+- name: Wait for the bridge device to appear
+  ansible.builtin.wait_for:
+    path: "/sys/class/net/{{ provisioning_network.bridge }}/operstate"
+    timeout: "{{ libvirt_network_bridge_timeout }}"
+  tags: [provisioning, network]
+
+- name: Read the addresses configured on the bridge
+  ansible.builtin.command: "ip -json -4 addr show dev {{ provisioning_network.bridge }}"
+  changed_when: false
+  register: forge_bridge_addr
+  tags: [provisioning, network, validation]
+
+- name: Confirm the bridge carries the gateway address
+  ansible.builtin.assert:
+    that:
+      - provisioning_network.gateway in (forge_bridge_addr.stdout | from_json | json_query('[].addr_info[].local'))
+    fail_msg: >-
+      Bridge {{ provisioning_network.bridge }} exists but does not carry
+      {{ provisioning_network.gateway }}. The boot HTTP server, the SMB export and
+      dnsmasq all bind to that address, so nothing downstream will work.
+      Inspect with: ip addr show dev {{ provisioning_network.bridge }}
+    success_msg: "{{ provisioning_network.bridge }} is up with {{ provisioning_network.gateway }}"
+  tags: [provisioning, network, validation]
+
+- name: Verify that libvirt did not start a competing dnsmasq for this network
+  # If this file exists, the network XML picked up a <dhcp> or <dns>
+  # element somewhere and libvirt is now serving DHCP alongside us.
+  ansible.builtin.stat:
+    path: "/var/lib/libvirt/dnsmasq/{{ provisioning_network.name }}.conf"
+  become: true
+  register: forge_libvirt_dnsmasq
+  tags: [provisioning, network, validation]
+
+- name: Fail when libvirt is also serving DHCP on this bridge
+  ansible.builtin.fail:
+    msg: |
+      libvirt has started its own dnsmasq for '{{ provisioning_network.name }}'
+      (/var/lib/libvirt/dnsmasq/{{ provisioning_network.name }}.conf exists).
+
+      Two DHCP servers on {{ provisioning_network.bridge }} will make PXE fail
+      intermittently and unpredictably.
+
+      The network XML must contain <dns enable="no"/> and no <dhcp> element.
+      Re-render and recreate it:
+        ansible-playbook playbooks/create-provisioning-network.yml -e libvirt_network_force_recreate=true
+  when: forge_libvirt_dnsmasq.stat.exists
+  tags: [provisioning, network, validation]
+
+- name: Publish the network facts
+  ansible.builtin.set_fact:
+    forge_network_ready: true
+    forge_network_bridge: "{{ provisioning_network.bridge }}"
+    cacheable: true
+  tags: [always, provisioning, network]

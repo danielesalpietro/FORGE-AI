@@ -1,0 +1,8 @@
+---
+# Re-download the ISO even if it is present and its checksum matches.
+ubuntu_media_force_download: false
+# Verify against the official SHA256SUMS when media.ubuntu.iso_sha256 is
+# empty. Setting this false accepts an unverified ISO and is loud about it.
+ubuntu_media_verify_checksum: true
+ubuntu_media_sha256sums_url: "https://releases.ubuntu.com/{{ media.ubuntu.version | regex_replace('^(\\d+\\.\\d+).*$', '\\1') }}/SHA256SUMS"
+ubuntu_media_download_timeout: 3600

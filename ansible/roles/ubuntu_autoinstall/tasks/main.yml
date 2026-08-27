@@ -1,0 +1,189 @@
+---
+# =====================================================================
+# ubuntu_autoinstall -- render and publish the NoCloud seed
+# =====================================================================
+# The seed directory contains user-data, meta-data and vendor-data and
+# is served at:
+#
+#   http://<gateway>:8080/ubuntu/<hostname>/
+#
+# The trailing slash matters: cloud-init appends the file names to the
+# ds=nocloud;s=... value verbatim, so without it the installer requests
+# ".../poc-ubuntu-01user-data" and silently waits for an interactive
+# session instead. That is the single most common Ubuntu PXE failure.
+# =====================================================================
+
+- name: Require a bootstrap password hash
+  ansible.builtin.assert:
+    that:
+      - ubuntu_bootstrap_password_hash | default('') | length > 0
+      - ubuntu_bootstrap_password_hash is match('^\\$(y|6|5|2[aby])\\$')
+    fail_msg: |
+      vault_ubuntu_bootstrap_password_hash is missing or is not a crypt(3) hash.
+
+      Subiquity requires a hashed password for the identity section; a cleartext
+      one would be written into a file served over HTTP and would also end up in
+      /var/log/installer on the target.
+
+      Generate one and put it in the vault:
+        mkpasswd --method=yescrypt
+        ./bootstrap/create-secrets.sh          # does this for you
+
+      Expected form: $y$..., $6$... (yescrypt or SHA-512).
+    success_msg: "Bootstrap password hash present ({{ ubuntu_bootstrap_password_hash[:3] }}...)"
+  no_log: true
+  tags: [provisioning, linux, security]
+
+- name: Require at least one authorised SSH key
+  ansible.builtin.assert:
+    that:
+      - security.ssh_authorized_keys | default([]) | length > 0
+    fail_msg: |
+      security.ssh_authorized_keys is empty.
+
+      The installed host disables SSH password authentication
+      (security.ssh_password_authentication = {{ security.ssh_password_authentication }}),
+      so with no authorised key Ansible would never be able to reach it.
+
+      Run ./bootstrap/create-secrets.sh to generate a key pair and record the
+      public half in config/poc.yml.
+    success_msg: "{{ security.ssh_authorized_keys | length }} authorised SSH key(s)"
+  tags: [provisioning, linux, security]
+
+- name: Create the per-host seed directories
+  ansible.builtin.file:
+    path: "{{ storage.http_root }}/ubuntu/{{ item.name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, linux]
+
+- name: Render the autoinstall user-data
+  ansible.builtin.template:
+    src: ubuntu/user-data.j2
+    dest: "{{ storage.http_root }}/ubuntu/{{ item.name }}/user-data"
+    owner: root
+    group: root
+    # World-readable because nginx in the bootsrv container reads it as
+    # an unprivileged user, and because the installer fetches it over
+    # HTTP anyway -- restricting the file mode would be theatre. The
+    # real control is that it holds a hash, not a password, and that it
+    # is purged after installation.
+    mode: "0644"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  tags: [provisioning, linux]
+
+- name: Render the autoinstall meta-data
+  ansible.builtin.template:
+    src: ubuntu/meta-data.j2
+    dest: "{{ storage.http_root }}/ubuntu/{{ item.name }}/meta-data"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, linux]
+
+- name: Render the autoinstall vendor-data
+  ansible.builtin.template:
+    src: ubuntu/vendor-data.j2
+    dest: "{{ storage.http_root }}/ubuntu/{{ item.name }}/vendor-data"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, linux]
+
+# ---------------------------------------------------------------------
+# Validation: a malformed seed makes Subiquity drop to an interactive
+# prompt, which looks like a hang on a headless VM.
+# ---------------------------------------------------------------------
+- name: Read back the rendered user-data
+  ansible.builtin.slurp:
+    src: "{{ storage.http_root }}/ubuntu/{{ item.name }}/user-data"
+  become: true
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_seed_content
+  when: ubuntu_autoinstall_validate | bool
+  no_log: true
+  tags: [provisioning, linux, validation]
+
+- name: Assert the seed parses as YAML and carries the mandatory keys
+  ansible.builtin.assert:
+    that:
+      - parsed.autoinstall is defined
+      - parsed.autoinstall.version | default(0) == 1
+      - parsed.autoinstall.identity.hostname | default('') == item.item.name
+      - parsed.autoinstall.identity.username | default('') == users.automation_user
+      - parsed.autoinstall.ssh['install-server'] | default(false)
+      - parsed.autoinstall.ssh['authorized-keys'] | default([]) | length > 0
+      - parsed.autoinstall.storage.config | default([]) | length > 0
+      - parsed.autoinstall['late-commands'] | default([]) | length > 0
+    fail_msg: >-
+      The rendered autoinstall seed for {{ item.item.name }} is missing a mandatory
+      key. Subiquity would drop to an interactive prompt, which on a headless VM
+      looks like a hang. Inspect:
+      {{ storage.http_root }}/ubuntu/{{ item.item.name }}/user-data
+    success_msg: "{{ item.item.name }}: autoinstall seed is structurally valid"
+  vars:
+    parsed: "{{ item.content | b64decode | from_yaml }}"
+  loop: "{{ forge_seed_content.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: ubuntu_autoinstall_validate | bool
+  tags: [provisioning, linux, validation]
+
+- name: Confirm the seed is reachable over HTTP exactly as the installer will request it
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/ubuntu/{{ item.name }}/user-data"
+    method: GET
+    status_code: [200]
+    return_content: false
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_seed_http
+  changed_when: false
+  failed_when: false
+  tags: [provisioning, linux, validation]
+
+- name: Assert the seed is served
+  ansible.builtin.assert:
+    that:
+      - item.status | default(0) == 200
+    fail_msg: |
+      {{ forge_boot_base_url }}/ubuntu/{{ item.item.name }}/user-data returned
+      HTTP {{ item.status | default('no response') }}.
+
+      The installer fetches this exact URL. Until it returns 200, the VM will
+      boot the installer and then wait forever at an interactive prompt.
+
+      Check: docker compose ps bootsrv
+             curl -I {{ forge_boot_base_url }}/ubuntu/{{ item.item.name }}/user-data
+    success_msg: "{{ item.item.name }}: seed served over HTTP"
+  loop: "{{ forge_seed_http.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  tags: [provisioning, linux, validation]

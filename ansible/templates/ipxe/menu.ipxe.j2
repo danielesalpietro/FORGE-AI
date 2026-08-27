@@ -10,9 +10,9 @@ set base {{ forge_boot_base_url }}
 set timeout {{ pxe.menu_timeout_ms }}
 
 :menu
-menu FORGE-AI provisioning -- {{ environment.name }} -- ${net0/mac}
+menu FORGE-AI provisioning -- {{ deployment.name }} -- ${net0/mac}
 item --gap --             Automated profiles
-{% for host in hosts %}
+{% for host in forge_hosts %}
 item host-{{ loop.index }}   Install {{ host.profile }} as {{ host.name }} ({{ host.ip_address }})
 {% endfor %}
 item --gap --             Diagnostics
@@ -24,7 +24,7 @@ item local                Boot from local disk  [default]
 choose --default local --timeout ${timeout} selection || goto local
 goto ${selection}
 
-{% for host in hosts %}
+{% for host in forge_hosts %}
 :host-{{ loop.index }}
 echo Chaining installer for {{ host.name }} ({{ host.profile }})
 chain --autofree ${base}/boot/host-{{ host.mac_address | replace(':', '-') }}-install.ipxe || goto failed

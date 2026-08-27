@@ -1,0 +1,67 @@
+---
+# =====================================================================
+# Final validation
+# =====================================================================
+# Read-only assertions that the desired state is actually in force.
+# These deliberately re-read the system rather than trusting the
+# "changed" status of earlier tasks: a task can report ok and still not
+# have produced the intended effect if something else overrides it.
+# =====================================================================
+
+- name: Collect the service states
+  ansible.builtin.service_facts:
+  tags: [linux, validation]
+
+- name: Assert the expected services are running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[item ~ '.service'] is defined
+      - ansible_facts.services[item ~ '.service'].state == 'running'
+    fail_msg: >-
+      {{ item }} is not running on {{ inventory_hostname }}
+      (state: {{ ansible_facts.services[item ~ '.service'].state | default('not present') }}).
+      Inspect with: systemctl status {{ item }}
+    success_msg: "{{ item }} is running"
+  vars:
+    forge_expected_services: >-
+      {{ ['ssh', 'qemu-guest-agent']
+         + (['chrony'] if ubuntu_baseline_manage_ntp | bool else [])
+         + (['auditd'] if ubuntu_baseline_manage_audit | bool else []) }}
+  loop: "{{ forge_expected_services }}"
+  tags: [linux, validation]
+
+- name: Run the health check
+  ansible.builtin.command: /usr/local/bin/forge-health --json
+  become: true
+  changed_when: false
+  register: forge_health
+  failed_when: false
+  tags: [linux, validation]
+
+- name: Publish the health result
+  ansible.builtin.set_fact:
+    forge_host_health: "{{ forge_health.stdout | from_json }}"
+  when: forge_health.rc is defined and forge_health.stdout | default('') | length > 0
+  failed_when: false
+  tags: [linux, validation]
+
+- name: Report the health check
+  ansible.builtin.debug:
+    msg: |
+      {{ inventory_hostname }} health: {{ forge_host_health.status | default('unknown') }}
+      {% for check in forge_host_health.checks | default([]) %}
+        {{ '[ok]  ' if check.ok else '[FAIL]' }} {{ check.name }}: {{ check.detail }}
+      {% endfor %}
+  tags: [linux, validation]
+
+- name: Fail when the health check reports a problem
+  ansible.builtin.fail:
+    msg: >-
+      forge-health reports {{ forge_host_health.status | default('unknown') }} on
+      {{ inventory_hostname }}. Failing checks:
+      {{ forge_host_health.checks | default([]) | rejectattr('ok') | map(attribute='name') | join(', ') }}
+  when:
+    - forge_host_health is defined
+    - forge_host_health.status | default('ok') != 'ok'
+    - not ansible_check_mode
+  tags: [linux, validation]

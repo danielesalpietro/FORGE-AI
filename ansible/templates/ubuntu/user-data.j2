@@ -17,11 +17,11 @@ autoinstall:
   # Fail loudly instead of dropping to an interactive prompt.
   interactive-sections: []
 
-  locale: {{ environment.locale }}
+  locale: {{ deployment.locale }}
   keyboard:
-    layout: {{ environment.keyboard_layout }}
-    variant: "{{ environment.keyboard_variant | default('') }}"
-  timezone: {{ environment.timezone }}
+    layout: {{ deployment.keyboard_layout }}
+    variant: "{{ deployment.keyboard_variant | default('') }}"
+  timezone: {{ deployment.timezone }}
 
   refresh-installer:
     update: false
@@ -104,7 +104,7 @@ autoinstall:
         preserve: false
       - type: lvm_volgroup
         id: vg0
-        name: vg-{{ environment.name }}
+        name: vg-{{ deployment.name }}
         devices: [part-lvm]
         preserve: false
       - type: lvm_partition
@@ -157,8 +157,8 @@ autoinstall:
     disable_root: true
     preserve_hostname: false
     hostname: {{ host.name }}
-    fqdn: {{ host.name }}.{{ environment.domain }}
-    timezone: {{ environment.timezone }}
+    fqdn: {{ host.name }}.{{ deployment.domain }}
+    timezone: {{ deployment.timezone }}
     ntp:
       enabled: true
       servers:

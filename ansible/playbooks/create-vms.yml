@@ -1,0 +1,45 @@
+---
+# =====================================================================
+# Define and start the target virtual machines.
+# =====================================================================
+#   make create-vms
+#
+# The VMs boot from the network. What they receive is decided by the
+# state service, not by this playbook.
+# =====================================================================
+- name: Create the target virtual machines
+  hosts: control_plane
+  gather_facts: true
+  tags: [provisioning]
+
+  pre_tasks:
+    - name: Confirm the boot services are answering
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/healthz"
+        status_code: [200]
+      register: forge_boot_ready
+      failed_when: false
+      changed_when: false
+      tags: [provisioning, validation]
+
+    - name: Stop when the boot services are down
+      ansible.builtin.fail:
+        msg: |
+          The provisioning state service is not answering at
+          {{ forge_boot_base_url }}/api/healthz.
+
+          Starting the VMs now would network-boot them into nothing, burn an
+          install attempt each, and leave them at the iPXE prompt.
+
+          Bring the services up first:
+            make deploy-control-plane
+            make deploy-pxe
+      when: forge_boot_ready.status | default(0) != 200
+      tags: [provisioning, validation]
+
+  roles:
+    - role: vm_lifecycle
+      vars:
+        vm_lifecycle_state: running
+        forge_boot_target: network
+      tags: [provisioning]

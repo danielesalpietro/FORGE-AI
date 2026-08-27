@@ -1,0 +1,40 @@
+---
+# =====================================================================
+# FORGE-AI :: KVM host variables
+# =====================================================================
+# Everything that creates virtual machines, manages libvirt networks,
+# writes to /srv/forge-ai or drives Docker runs here.
+
+ansible_connection: local
+ansible_become: true
+ansible_become_method: ansible.builtin.sudo
+
+# Host packages installed by roles/libvirt_host. Ubuntu 24.04 names.
+forge_host_packages:
+  - qemu-kvm
+  - libvirt-daemon-system
+  - libvirt-clients
+  - virtinst
+  - ovmf
+  - dnsmasq
+  - genisoimage
+  - xorriso
+  - p7zip-full
+  - wimtools
+  - rsync
+  - curl
+  - jq
+  - python3-libvirt
+  - python3-lxml
+  - net-tools
+  - tcpdump
+
+# dnsmasq on Ubuntu ships an /etc/dnsmasq.d drop-in directory but also a
+# system-wide instance bound to every interface. FORGE-AI runs a second,
+# dedicated instance instead; see roles/pxe_server.
+forge_dnsmasq_service: forge-dnsmasq
+forge_dnsmasq_config: /etc/forge-ai/dnsmasq.conf
+
+# Compose invocation used by every control-plane task.
+forge_compose_file: "{{ forge_repo_root }}/compose/docker-compose.yml"
+forge_compose_env_file: "{{ forge_repo_root }}/compose/.env"

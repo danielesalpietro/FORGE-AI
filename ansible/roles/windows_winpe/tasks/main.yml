@@ -1,0 +1,247 @@
+---
+# =====================================================================
+# windows_winpe -- build the network-bootable WinPE image
+# =====================================================================
+# The boot chain is:
+#
+#   iPXE -> wimboot -> bootmgr + BCD + boot.sdi + boot.wim
+#        -> startnet.cmd -> setup.exe /unattend:
+#
+# wimboot also injects any *additional* file it is given into
+# \Windows\System32 of the booted image. That is how each host receives
+# its own startnet.cmd and its own Autounattend.xml without either ever
+# being written to a shared directory on the KVM host.
+#
+# The VirtIO drivers are a different problem: they must be inside the
+# WIM before it boots, because drvload needs them on X:. Injecting files
+# into a WIM normally means DISM on a Windows machine; wimlib-imagex
+# does it on Linux, which is what keeps this role fully automated.
+# =====================================================================
+
+- name: Determine whether a Windows target is configured
+  ansible.builtin.set_fact:
+    forge_windows_hosts: "{{ forge_hosts | selectattr('os_family', 'eq', 'windows') | list }}"
+  tags: [always, windows]
+
+- name: Skip WinPE when no Windows host is defined
+  ansible.builtin.meta: end_play
+  when: forge_windows_hosts | length == 0
+  tags: [windows]
+
+- name: Confirm the extracted media is available
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/media/sources/boot.wim"
+  become: true
+  register: forge_winpe_source
+  tags: [windows, media]
+
+- name: Stop when boot.wim has not been extracted
+  ansible.builtin.fail:
+    msg: |
+      {{ storage.http_root }}/windows/media/sources/boot.wim is missing.
+
+      Run the media preparation first:
+        make prepare-windows-media
+
+      That role extracts boot.wim from the operator-supplied ISO. Nothing from
+      Microsoft is shipped with this repository.
+  when: not forge_winpe_source.stat.exists
+  tags: [windows, media]
+
+# ---------------------------------------------------------------------
+# wimboot
+# ---------------------------------------------------------------------
+- name: Check for a staged wimboot
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/wimboot/wimboot"
+    checksum_algorithm: sha256
+  become: true
+  register: forge_wimboot
+  tags: [windows, media]
+
+- name: Download wimboot
+  ansible.builtin.get_url:
+    url: "{{ wimboot_url }}"
+    dest: "{{ storage.http_root }}/wimboot/wimboot"
+    checksum: "{{ ('sha256:' ~ wimboot_sha256) if wimboot_sha256 | length == 64 else omit }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: 300
+  become: true
+  when: not forge_wimboot.stat.exists or wimboot_force_download | default(false) | bool
+  register: forge_wimboot_download
+  retries: 3
+  delay: 5
+  until: forge_wimboot_download is succeeded
+  tags: [windows, media]
+
+- name: Record the wimboot checksum
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/wimboot/wimboot"
+    checksum_algorithm: sha256
+  become: true
+  register: forge_wimboot_verified
+  tags: [windows, media, validation]
+
+- name: Report an unpinned wimboot checksum
+  ansible.builtin.debug:
+    msg: |
+      wimboot {{ wimboot_version }} SHA-256: {{ forge_wimboot_verified.stat.checksum }}
+
+      Pin it in group_vars or roles/windows_winpe/defaults/main.yml:
+        wimboot_sha256: "{{ forge_wimboot_verified.stat.checksum }}"
+
+      wimboot is the first code the Windows target executes over the network.
+      An unpinned download is the "unsigned boot components" threat in
+      docs/SECURITY.md.
+  when: wimboot_sha256 | length != 64
+  tags: [windows, media, validation]
+
+# ---------------------------------------------------------------------
+# Per-host WinPE staging
+# ---------------------------------------------------------------------
+- name: Create the per-host WinPE directories
+  ansible.builtin.file:
+    path: "{{ storage.http_root }}/windows/{{ item.name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows]
+
+- name: Stage the boot loader files for each host
+  # bootmgr.exe, BCD and boot.sdi come straight from the ISO. wimboot
+  # needs all four (with boot.wim) to hand a working boot environment to
+  # the Windows loader.
+  ansible.builtin.copy:
+    src: "{{ item.1.src }}"
+    dest: "{{ storage.http_root }}/windows/{{ item.0.name }}/{{ item.1.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_windows_hosts | product(winpe_boot_files) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1.dest }}"
+  vars:
+    winpe_boot_files:
+      - { src: "{{ storage.http_root }}/windows/media/bootmgr.efi", dest: bootmgr.exe }
+      - { src: "{{ storage.http_root }}/windows/media/boot/bcd", dest: BCD }
+      - { src: "{{ storage.http_root }}/windows/media/boot/boot.sdi", dest: boot.sdi }
+  failed_when: false
+  register: forge_winpe_bootfiles
+  tags: [windows]
+
+- name: Locate the boot loader files case-insensitively
+  # 7z preserves the ISO's own casing, which varies between Windows
+  # releases (boot/BCD vs Boot/bcd vs BOOT/BCD). Finding them is more
+  # robust than guessing.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      find "{{ storage.http_root }}/windows/media" -maxdepth 2 -iname "{{ item.pattern }}" -type f | head -1
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  loop:
+    - { pattern: "bootmgr.efi", dest: "bootmgr.exe" }
+    - { pattern: "bcd", dest: "BCD" }
+    - { pattern: "boot.sdi", dest: "boot.sdi" }
+  loop_control:
+    label: "{{ item.pattern }}"
+  register: forge_winpe_located
+  tags: [windows]
+
+- name: Fail when a boot loader file cannot be found in the media
+  ansible.builtin.fail:
+    msg: |
+      These files are missing from the extracted Windows media:
+      {% for result in forge_winpe_located.results | selectattr('stdout', 'eq', '') %}
+        {{ result.item.pattern }}
+      {% endfor %}
+
+      wimboot needs bootmgr.efi, BCD and boot.sdi alongside boot.wim.
+      Their absence usually means the ISO is not a Windows *installation*
+      image. Inspect:
+        find {{ storage.http_root }}/windows/media -maxdepth 2 -type f | head -40
+  when: forge_winpe_located.results | selectattr('stdout', 'eq', '') | list | length > 0
+  tags: [windows]
+
+- name: Stage the located boot loader files for each host
+  ansible.builtin.copy:
+    src: "{{ item.1.stdout }}"
+    dest: "{{ storage.http_root }}/windows/{{ item.0.name }}/{{ item.1.item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_windows_hosts | product(forge_winpe_located.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1.item.dest }}"
+  tags: [windows]
+
+- name: Include the driver injection into boot.wim
+  ansible.builtin.include_tasks: inject-drivers.yml
+  tags: [windows, media]
+
+- name: Stage the prepared boot.wim for each host
+  ansible.builtin.copy:
+    src: "{{ storage.http_root }}/windows/boot-forge.wim"
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/boot.wim"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows]
+
+- name: Render the per-host WinPE startup script
+  ansible.builtin.template:
+    src: windows/startnet.cmd.j2
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/startnet.cmd"
+    owner: root
+    group: root
+    mode: "0644"
+    # WinPE's cmd.exe requires CRLF; a LF-only batch file fails in ways
+    # that look like a corrupted image.
+    newline_sequence: "\r\n"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows]
+
+- name: Confirm every host has a complete WinPE file set
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/{{ item.0.name }}/{{ item.1 }}"
+  become: true
+  loop: "{{ forge_windows_hosts | product(['bootmgr.exe', 'BCD', 'boot.sdi', 'boot.wim', 'startnet.cmd']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1 }}"
+  register: forge_winpe_complete
+  tags: [windows, validation]
+
+- name: Assert the WinPE file set is complete
+  ansible.builtin.assert:
+    that:
+      - forge_winpe_complete.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: |
+      Incomplete WinPE staging:
+      {% for result in forge_winpe_complete.results | rejectattr('stat.exists') %}
+        missing {{ result.item.0.name }}/{{ result.item.1 }}
+      {% endfor %}
+      iPXE fetches all of these by name; a missing one stops the boot at wimboot.
+    success_msg: "WinPE staged for {{ forge_windows_hosts | map(attribute='name') | join(', ') }}"
+  tags: [windows, validation]

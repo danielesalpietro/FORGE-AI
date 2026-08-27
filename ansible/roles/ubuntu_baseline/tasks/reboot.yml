@@ -1,0 +1,47 @@
+---
+# =====================================================================
+# Reboot handling
+# =====================================================================
+# Only when the system actually asks for one, and only when the play is
+# allowed to. A drift-detection run in check mode must never reboot a
+# production-shaped machine to satisfy a cosmetic change.
+# =====================================================================
+
+- name: Check whether the system requests a reboot
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: forge_reboot_required
+  tags: [linux, bootstrap]
+
+- name: Read what asked for the reboot
+  ansible.builtin.slurp:
+    src: /var/run/reboot-required.pkgs
+  become: true
+  register: forge_reboot_packages
+  when: forge_reboot_required.stat.exists
+  failed_when: false
+  tags: [linux, bootstrap]
+
+- name: Report the pending reboot
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} requests a reboot
+      ({{ (forge_reboot_packages.content | default('') | b64decode).split('\n') | select | join(', ') | default('reason not recorded', true) }}).
+      {{ 'Rebooting now.' if ubuntu_baseline_allow_reboot | bool and not ansible_check_mode
+         else 'NOT rebooting: ' ~ ('check mode' if ansible_check_mode else 'ubuntu_baseline_allow_reboot is false') ~ '.' }}
+  when: forge_reboot_required.stat.exists
+  tags: [linux, bootstrap]
+
+- name: Reboot and wait for the host to come back
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ ubuntu_baseline_reboot_timeout }}"
+    connect_timeout: 30
+    post_reboot_delay: 15
+    test_command: systemctl is-system-running --wait
+    msg: "Rebooting for FORGE-AI deployment {{ forge_deployment_id }}"
+  become: true
+  when:
+    - forge_reboot_required.stat.exists
+    - ubuntu_baseline_allow_reboot | bool
+    - not ansible_check_mode
+  tags: [linux, bootstrap]

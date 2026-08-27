@@ -1,0 +1,218 @@
+---
+# =====================================================================
+# windows_media -- operator-supplied Windows Server media
+# =====================================================================
+# NOTHING FROM MICROSOFT IS REDISTRIBUTED BY THIS REPOSITORY.
+#
+# The operator points media.windows.iso_path at a Windows Server ISO
+# they obtained themselves (docs/WINDOWS-PROVISIONING.md explains how to
+# get Evaluation media legally). This role:
+#
+#   * verifies the file exists and is readable;
+#   * records its SHA-256 so the deployment report is auditable;
+#   * inspects install.wim and REFUSES to continue unless the configured
+#     edition actually exists inside it;
+#   * extracts the contents for the SMB export WinPE reads.
+#
+# The edition check is the important one. "Index 1" on a Windows Server
+# ISO is usually the Standard *Core* image, not the Desktop Experience
+# image an operator expects, and the mistake only surfaces after a
+# 20-minute installation.
+# =====================================================================
+
+- name: Determine whether a Windows target is configured
+  ansible.builtin.set_fact:
+    forge_windows_hosts: "{{ forge_hosts | selectattr('os_family', 'eq', 'windows') | list }}"
+  tags: [always, media, windows]
+
+- name: Skip the Windows media path when no Windows host is defined
+  ansible.builtin.meta: end_play
+  when: forge_windows_hosts | length == 0
+  tags: [media, windows]
+
+- name: Check the operator-supplied ISO
+  ansible.builtin.stat:
+    path: "{{ media.windows.iso_path }}"
+    get_checksum: false
+  become: true
+  register: forge_windows_iso
+  when: media.windows.iso_path | default('') | length > 0
+  tags: [media, windows]
+
+- name: Stop when the Windows ISO is required but absent
+  ansible.builtin.fail:
+    msg: |
+      A Windows target is configured but no usable Windows Server ISO was found.
+
+        media.windows.iso_path = "{{ media.windows.iso_path | default('') }}"
+
+      Windows Server media is NOT redistributed by this repository. Obtain
+      Windows Server 2025 Evaluation from the Microsoft Evaluation Center,
+      place the ISO on this host, and set the path in config/poc.yml:
+
+        media:
+          windows:
+            iso_path: /srv/forge-ai/iso/windows-server-2025-eval.iso
+
+      Then list the editions it contains and copy the exact name:
+
+        make windows-images
+
+      Full procedure and licensing notes: docs/WINDOWS-PROVISIONING.md
+      The Ubuntu target does not depend on any of this and can be deployed
+      on its own with: make provision-ubuntu
+  when:
+    - windows_media_required | bool
+    - media.windows.iso_path | default('') | length == 0 or not forge_windows_iso.stat.exists | default(false)
+  tags: [media, windows]
+
+- name: Warn and stop the Windows path when the ISO is absent but not required
+  ansible.builtin.meta: end_play
+  when: media.windows.iso_path | default('') | length == 0 or not forge_windows_iso.stat.exists | default(false)
+  tags: [media, windows]
+
+- name: Record the SHA-256 of the Windows ISO
+  # Computed rather than trusted: this is what makes the deployment
+  # report say exactly which media produced the machine.
+  ansible.builtin.command: "sha256sum {{ media.windows.iso_path }}"
+  become: true
+  changed_when: false
+  register: forge_windows_sha256
+  tags: [media, windows]
+
+- name: Compare against the pinned checksum
+  ansible.builtin.assert:
+    that:
+      - forge_windows_sha256.stdout.split()[0] == media.windows.iso_sha256
+    fail_msg: |
+      {{ media.windows.iso_path }} does not match the checksum pinned in config/poc.yml.
+
+        expected: {{ media.windows.iso_sha256 }}
+        observed: {{ forge_windows_sha256.stdout.split()[0] }}
+
+      Either the ISO was replaced or the pin is stale. Do not proceed until you
+      know which -- see docs/SECURITY.md, "tampered ISO".
+    success_msg: "Windows ISO matches the pinned checksum"
+  when: media.windows.iso_sha256 | default('') | length == 64
+  tags: [media, windows, validation]
+
+- name: Report the observed checksum when none is pinned
+  ansible.builtin.debug:
+    msg: |
+      Windows ISO SHA-256: {{ forge_windows_sha256.stdout.split()[0] }}
+
+      No checksum is pinned in config/poc.yml. Pin it so a future run detects a
+      substituted ISO:
+
+        media:
+          windows:
+            iso_sha256: "{{ forge_windows_sha256.stdout.split()[0] }}"
+  when: media.windows.iso_sha256 | default('') | length != 64
+  tags: [media, windows, validation]
+
+# ---------------------------------------------------------------------
+# Extraction
+# ---------------------------------------------------------------------
+- name: Create the Windows media directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ storage.http_root }}/windows/media"
+    - "{{ storage.http_root }}/windows/virtio"
+  tags: [media, windows]
+
+- name: Check whether the media has already been extracted
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/media/sources/install.wim"
+  become: true
+  register: forge_windows_install_wim
+  tags: [media, windows]
+
+- name: Check for an ESD-compressed image instead
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/media/sources/install.esd"
+  become: true
+  register: forge_windows_install_esd
+  tags: [media, windows]
+
+- name: Extract the Windows ISO
+  ansible.builtin.command:
+    argv:
+      - 7z
+      - x
+      - -y
+      - "-o{{ storage.http_root }}/windows/media"
+      - "{{ media.windows.iso_path }}"
+  become: true
+  when: >-
+    windows_media_force_extract | bool
+    or not (forge_windows_install_wim.stat.exists or forge_windows_install_esd.stat.exists)
+  register: forge_windows_extract
+  changed_when: forge_windows_extract.rc == 0
+  tags: [media, windows]
+
+- name: Re-check which image format is present after extraction
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/media/sources/{{ item }}"
+  become: true
+  loop: [install.wim, install.esd, boot.wim]
+  register: forge_windows_images
+  tags: [media, windows, validation]
+
+- name: Identify the installation image
+  ansible.builtin.set_fact:
+    forge_windows_install_image: >-
+      {{ (forge_windows_images.results | selectattr('stat.exists')
+          | selectattr('item', 'in', ['install.wim', 'install.esd'])
+          | map(attribute='stat.path') | first | default('')) }}
+    forge_windows_boot_wim: >-
+      {{ (forge_windows_images.results | selectattr('stat.exists')
+          | selectattr('item', 'eq', 'boot.wim')
+          | map(attribute='stat.path') | first | default('')) }}
+  tags: [media, windows, validation]
+
+- name: Assert that the extraction produced a usable image set
+  ansible.builtin.assert:
+    that:
+      - forge_windows_install_image | length > 0
+      - forge_windows_boot_wim | length > 0
+    fail_msg: |
+      {{ media.windows.iso_path }} did not yield sources/install.wim (or .esd)
+      and sources/boot.wim.
+
+      That usually means the file is not a Windows Server installation ISO --
+      a Windows *update* or *ADK* ISO has a different layout.
+
+      Inspect what was extracted:
+        ls -la {{ storage.http_root }}/windows/media/sources/
+    success_msg: >-
+      Installation image: {{ forge_windows_install_image | basename }},
+      WinPE image: {{ forge_windows_boot_wim | basename }}
+  tags: [media, windows, validation]
+
+- name: Include the WIM edition inspection
+  ansible.builtin.include_tasks: inspect-wim.yml
+  tags: [media, windows, validation]
+
+- name: Include the VirtIO driver preparation
+  ansible.builtin.include_tasks: virtio.yml
+  when: windows_media_fetch_virtio | bool
+  tags: [media, windows]
+
+- name: Publish the Windows media facts
+  ansible.builtin.set_fact:
+    forge_windows_media:
+      iso_path: "{{ media.windows.iso_path }}"
+      sha256: "{{ forge_windows_sha256.stdout.split()[0] }}"
+      install_image: "{{ forge_windows_install_image }}"
+      boot_wim: "{{ forge_windows_boot_wim }}"
+      selected_edition: "{{ forge_windows_selected_edition | default('unknown') }}"
+      selected_index: "{{ forge_windows_selected_index | default(0) }}"
+      share: "//{{ provisioning_network.gateway }}/{{ windows_media_share_name }}"
+    cacheable: true
+  tags: [always, media, windows]

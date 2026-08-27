@@ -1,0 +1,69 @@
+---
+# =====================================================================
+# QEMU guest agent
+# =====================================================================
+# SetupComplete.cmd already tried to install this from the VirtIO SMB
+# share. This is the second chance, over WinRM, for the case where the
+# share was unreachable at that moment.
+#
+# It is genuinely useful rather than cosmetic: `virsh domifaddr --source
+# agent` reads the guest's real address, which is how the smoke test
+# verifies networking without trusting the DHCP reservation it just
+# configured.
+# =====================================================================
+
+- name: Check whether the guest agent service exists
+  ansible.windows.win_service_info:
+    name: QEMU-GA
+  register: forge_qemu_ga
+  failed_when: false
+  tags: [windows, bootstrap]
+
+- name: Report an already-installed guest agent
+  ansible.builtin.debug:
+    msg: >-
+      QEMU guest agent already present
+      (state: {{ forge_qemu_ga.services[0].state | default('unknown') }}).
+  when: forge_qemu_ga.services | default([]) | length > 0
+  tags: [windows, bootstrap]
+
+- name: Download the guest agent installer from the boot server
+  ansible.windows.win_get_url:
+    url: "{{ forge_boot_base_url }}/windows/virtio/{{ media.windows.virtio.guest_agent_path }}"
+    dest: 'C:\Windows\Temp\qemu-ga.msi'
+    force: false
+  register: forge_qemu_ga_download
+  when: forge_qemu_ga.services | default([]) | length == 0
+  failed_when: false
+  tags: [windows, bootstrap]
+
+- name: Install the guest agent
+  ansible.windows.win_package:
+    path: 'C:\Windows\Temp\qemu-ga.msi'
+    state: present
+    arguments: /qn /norestart
+  when:
+    - forge_qemu_ga.services | default([]) | length == 0
+    - forge_qemu_ga_download is succeeded
+  register: forge_qemu_ga_install
+  failed_when: false
+  tags: [windows, bootstrap]
+
+- name: Ensure the guest agent service is running
+  ansible.windows.win_service:
+    name: QEMU-GA
+    start_mode: auto
+    state: started
+  failed_when: false
+  register: forge_qemu_ga_service
+  tags: [windows, bootstrap]
+
+- name: Note when the guest agent could not be installed
+  ansible.builtin.debug:
+    msg: >-
+      The QEMU guest agent is not installed on {{ inventory_hostname }}. Not
+      fatal: `virsh domifaddr --source agent` will not work, so the smoke test
+      falls back to the DHCP reservation. The usual cause is that
+      {{ media.windows.virtio.guest_agent_path }} is absent from this VirtIO ISO.
+  when: forge_qemu_ga_service is failed or forge_qemu_ga_service is skipped
+  tags: [windows, bootstrap]

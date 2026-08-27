@@ -12,7 +12,7 @@
 -->
 <domain type="kvm">
   <name>{{ host.name }}</name>
-  <title>FORGE-AI {{ host.profile }} ({{ environment.name }})</title>
+  <title>FORGE-AI {{ host.profile }} ({{ deployment.name }})</title>
   <description>Managed by FORGE-AI GitOps. commit={{ forge_git_commit | default('unknown') }} deployment={{ forge_deployment_id | default('manual') }}</description>
 
   <memory unit="MiB">{{ host.memory_mb }}</memory>

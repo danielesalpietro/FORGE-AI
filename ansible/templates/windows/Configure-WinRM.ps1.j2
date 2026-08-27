@@ -29,7 +29,7 @@ param(
     [int]    $Port           = {{ security.winrm_port }},
     [string] $HostName       = '{{ host.name }}',
     [string] $IpAddress      = '{{ host.ip_address }}',
-    [string] $Dns            = '{{ host.name }}.{{ environment.domain }}',
+    [string] $Dns            = '{{ host.name }}.{{ deployment.domain }}',
     [int]    $CertValidYears = {{ winrm_cert_valid_years | default(2) }}
 )
 

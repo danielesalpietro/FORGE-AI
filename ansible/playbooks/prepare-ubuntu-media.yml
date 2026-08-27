@@ -1,0 +1,17 @@
+---
+# =====================================================================
+# Download, verify and unpack the Ubuntu Server installation media.
+# =====================================================================
+#   make prepare-ubuntu-media
+# =====================================================================
+- name: Prepare the Ubuntu Server media
+  hosts: control_plane
+  gather_facts: true
+  tags: [media, linux]
+
+  roles:
+    - role: ubuntu_media
+      tags: [media]
+
+    - role: ubuntu_autoinstall
+      tags: [media, provisioning]

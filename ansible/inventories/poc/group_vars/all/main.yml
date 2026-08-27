@@ -1,0 +1,55 @@
+---
+# =====================================================================
+# FORGE-AI :: variables for every host
+# =====================================================================
+# The bulk of the configuration arrives from forge-inventory.py, which
+# publishes config/defaults.yml merged with config/poc.yml as group
+# variables on `all`. This file holds only the things that are a
+# property of the *run*, not of the desired state.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Run identity -- stamped into every rendered artefact and report.
+# ---------------------------------------------------------------------
+# Overridden per run by site.yml, or from Semaphore via the task
+# environment (-e forge_deployment_id=...).
+forge_deployment_id: "{{ lookup('env', 'FORGE_DEPLOYMENT_ID') | default(ansible_date_time.iso8601_basic_short | default('manual'), true) }}"
+forge_git_commit: "{{ lookup('env', 'FORGE_GIT_COMMIT') | default('unknown', true) }}"
+forge_git_branch: "{{ lookup('env', 'FORGE_GIT_BRANCH') | default('unknown', true) }}"
+forge_operator: "{{ lookup('env', 'FORGE_OPERATOR') | default(lookup('env', 'USER'), true) | default('unknown', true) }}"
+forge_trigger: "{{ lookup('env', 'FORGE_TRIGGER') | default('cli', true) }}"
+
+# ---------------------------------------------------------------------
+# Safety interlocks
+# ---------------------------------------------------------------------
+# destroy-poc.yml refuses to run unless this is passed explicitly:
+#   ansible-playbook playbooks/destroy-poc.yml -e confirm_destroy=DESTROY-POC
+confirm_destroy: ""
+
+# Set to true to let a playbook proceed past a warning that would
+# normally stop it (a DHCP conflict, an unpinned checksum). Every use is
+# logged loudly.
+forge_force: false
+
+# ---------------------------------------------------------------------
+# Timeouts used by the wait-for-* logic
+# ---------------------------------------------------------------------
+forge_wait_install_timeout: 3600      # OS installation, seconds
+forge_wait_ssh_timeout: 900
+forge_wait_winrm_timeout: 1800
+forge_wait_poll_interval: 15
+
+# ---------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------
+# Real values live in group_vars/all/vault.yml (Ansible Vault, git
+# ignored) or in the Semaphore Key Store. See vault.example.yml.
+# Declared here as empty so a missing vault produces a clear failure in
+# validate-prerequisites.yml rather than an undefined-variable crash
+# three playbooks later.
+vault_ubuntu_bootstrap_password: ""
+vault_windows_admin_password: ""
+vault_forge_state_token: ""
+
+ubuntu_bootstrap_password_hash: "{{ vault_ubuntu_bootstrap_password_hash | default('') }}"
+forge_state_token: "{{ vault_forge_state_token | default('') }}"

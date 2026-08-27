@@ -1,0 +1,124 @@
+---
+# =====================================================================
+# Task templates
+# =====================================================================
+# One template per workflow stage. The destructive one is created with a
+# REQUIRED survey variable, so the UI will not let it start without a
+# typed confirmation -- and destroy-poc.yml checks the value again on
+# the Ansible side, because a UI control is not a security boundary.
+# =====================================================================
+
+- name: List the existing templates
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/templates"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_templates
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the non-destructive templates
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/templates"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      name: "{{ item.name }}"
+      description: "{{ item.description }}"
+      playbook: "{{ semaphore_playbook_dir }}/{{ item.playbook }}"
+      inventory_id: "{{ forge_semaphore_inventory_id | int }}"
+      repository_id: "{{ forge_semaphore_repo_id | int }}"
+      environment_id: "{{ forge_semaphore_environment_id | int }}"
+      app: ansible
+      type: ""
+      arguments: "{{ (['--limit', item.limit] if item.limit is defined else []) | to_json }}"
+      allow_override_args_in_task: false
+      survey_vars: []
+    status_code: [201, 204]
+  loop: "{{ semaphore_templates | rejectattr('destructive') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: forge_semaphore_templates.json | selectattr('name', 'eq', item.name) | list | length == 0
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the destructive template with a required confirmation
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/templates"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      name: "{{ item.name }}"
+      description: "{{ item.description }}"
+      playbook: "{{ semaphore_playbook_dir }}/{{ item.playbook }}"
+      inventory_id: "{{ forge_semaphore_inventory_id | int }}"
+      repository_id: "{{ forge_semaphore_repo_id | int }}"
+      environment_id: "{{ forge_semaphore_environment_id | int }}"
+      app: ansible
+      type: ""
+      allow_override_args_in_task: false
+      survey_vars:
+        - name: confirm_destroy
+          title: "Type {{ safety.destroy_confirmation_token }} to confirm"
+          description: >-
+            This removes every target VM, its disk image, the provisioning
+            network and the prepared media. It cannot be undone.
+          type: ""
+          required: true
+    status_code: [201, 204]
+  loop: "{{ semaphore_templates | selectattr('destructive') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: forge_semaphore_templates.json | selectattr('name', 'eq', item.name) | list | length == 0
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Re-read the templates
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/templates"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_templates_final
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Publish the template routing for the webhook receiver
+  ansible.builtin.set_fact:
+    forge_template_routes: >-
+      {{ [['docs/**', none], ['*.md', none], ['LICENSE', none],
+          ['**', (forge_semaphore_templates_final.json
+                  | selectattr('name', 'search', '^10 ')
+                  | map(attribute='id') | first | default(none))]] }}
+  tags: [bootstrap, gitops]
+
+- name: Report the templates and the routing
+  ansible.builtin.debug:
+    msg: |
+      Semaphore templates ({{ forge_semaphore_templates_final.json | length }}):
+      {% for template in forge_semaphore_templates_final.json | sort(attribute='name') %}
+        [{{ template.id }}] {{ template.name }}
+      {% endfor %}
+
+      Webhook routing -- put this in compose/.env and restart the receiver:
+
+        FORGE_TEMPLATE_ROUTES={{ forge_template_routes | to_json }}
+        SEMAPHORE_PROJECT_ID={{ forge_semaphore_project_id }}
+
+      A docs-only commit is acknowledged and runs nothing. Anything else runs
+      the validation template, which is the safe default: a push should not
+      reprovision two virtual machines without someone choosing to.
+  tags: [bootstrap, gitops]

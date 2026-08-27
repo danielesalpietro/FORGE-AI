@@ -1,0 +1,17 @@
+---
+# iPXE binaries. On Ubuntu the `ipxe` package ships undionly.kpxe and
+# the `ipxe-qemu` package ships the EFI builds; scripts/download-ipxe-assets.sh
+# copies them into place and records their checksums.
+ipxe_bios_binary: undionly.kpxe
+ipxe_efi_binary: ipxe.efi
+ipxe_efi32_binary: ipxe32.efi
+
+# systemd unit for the dedicated dnsmasq instance. A dedicated instance
+# (rather than a drop-in under /etc/dnsmasq.d) keeps FORGE-AI from
+# changing the behaviour of any dnsmasq the host already runs.
+pxe_dnsmasq_unit: forge-dnsmasq
+pxe_dnsmasq_binary: /usr/sbin/dnsmasq
+
+# Refuse to start if the rendered configuration does not pass
+# `dnsmasq --test`. Always leave this on.
+pxe_validate_config: true

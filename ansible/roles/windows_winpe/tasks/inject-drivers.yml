@@ -1,0 +1,172 @@
+---
+# =====================================================================
+# Inject the VirtIO drivers into boot.wim
+# =====================================================================
+# WinPE has no in-box VirtIO driver:
+#
+#   * without viostor, diskpart sees no disk;
+#   * without NetKVM, wpeinit finds no NIC and the SMB mount fails.
+#
+# Injecting files into a WIM is normally a DISM operation on a Windows
+# machine. wimlib-imagex does it on Linux, which is what lets this role
+# run unattended on the Ubuntu control host. The alternative -- building
+# WinPE with the Windows ADK -- is documented in
+# docs/WINDOWS-PROVISIONING.md for operators who need a customised image.
+#
+# The drivers are placed in \Windows\System32\drivers\forge\ and loaded
+# by startnet.cmd with drvload, rather than being registered offline.
+# drvload is simpler, is visible in the WinPE log, and does not depend
+# on the driver store layout of the particular Windows release.
+# =====================================================================
+
+- name: Check whether the prepared boot.wim already exists
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/boot-forge.wim"
+  become: true
+  register: forge_prepared_wim
+  tags: [windows, media]
+
+- name: Copy boot.wim so the original media stays pristine
+  ansible.builtin.copy:
+    src: "{{ storage.http_root }}/windows/media/sources/boot.wim"
+    dest: "{{ storage.http_root }}/windows/boot-forge.wim"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+    force: true
+  become: true
+  when: winpe_force_rebuild | bool or not forge_prepared_wim.stat.exists
+  register: forge_wim_copied
+  tags: [windows, media]
+
+- name: Create a staging directory for the driver files  # noqa: no-handler
+  # Not a handler: staging only makes sense for the copy that just happened. A handler would run after every other
+  # task in the play, by which point the staging directory has
+  # already been removed.
+  ansible.builtin.file:
+    path: "{{ storage.artifacts_dir }}/tmp/winpe-drivers"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  when: forge_wim_copied is changed
+  tags: [windows, media]
+
+- name: Collect the driver files from the extracted VirtIO tree  # noqa: no-handler
+  # Not a handler: the files must be staged before the injection, in this order. A handler would run after every other
+  # task in the play, by which point the staging directory has
+  # already been removed.
+  # Every .inf needs its .sys and .cat siblings; copying the whole
+  # per-architecture directory is simpler and safer than enumerating them.
+  ansible.builtin.shell:
+    cmd: |
+      set -Eeuo pipefail
+      staging="{{ storage.artifacts_dir }}/tmp/winpe-drivers"
+      rm -rf "${staging:?}"/*
+      copied=0
+      for path in {{ media.windows.virtio.driver_paths | map('quote') | join(' ') }}; do
+        source="{{ storage.http_root }}/windows/virtio/${path}"
+        if [ -d "$source" ]; then
+          cp -a "$source"/. "$staging"/ 2>/dev/null || true
+          copied=$((copied + 1))
+        fi
+      done
+      echo "collected ${copied} driver directories"
+      ls -1 "$staging" | head -40
+    executable: /bin/bash
+  become: true
+  register: forge_driver_staging
+  changed_when: true
+  when: forge_wim_copied is changed
+  tags: [windows, media]
+
+- name: Show what was staged
+  ansible.builtin.debug:
+    msg: "{{ forge_driver_staging.stdout_lines | default(['(unchanged)']) }}"
+  tags: [windows, media]
+
+- name: Find the WinPE image index inside boot.wim
+  # A Windows installation boot.wim holds two images: index 1 is
+  # "Microsoft Windows PE", index 2 is "Microsoft Windows Setup". The
+  # Setup image is the one that actually boots into the installer, so
+  # that is the one the drivers must go into.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      wimlib-imagex info "{{ storage.http_root }}/windows/boot-forge.wim" \
+        | awk '/^Index:/{idx=$2} /^Name:/{ if ($0 ~ /Setup/) { print idx; exit } }'
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  register: forge_winpe_index
+  tags: [windows, media]
+
+- name: Select the WinPE image index
+  ansible.builtin.set_fact:
+    forge_winpe_image_index: "{{ forge_winpe_index.stdout | trim | default('2', true) or '2' }}"
+  tags: [windows, media]
+
+- name: Report the selected WinPE image
+  ansible.builtin.debug:
+    msg: >-
+      Injecting drivers into boot.wim image index {{ forge_winpe_image_index }}
+      (the Windows Setup image, not the bare WinPE image).
+  tags: [windows, media]
+
+- name: Inject the VirtIO drivers into the WinPE image  # noqa: no-handler
+  # Not a handler: the injection must follow the copy within this run, not at play end. A handler would run after every other
+  # task in the play, by which point the staging directory has
+  # already been removed.
+  ansible.builtin.command:
+    argv:
+      - wimlib-imagex
+      - update
+      - "{{ storage.http_root }}/windows/boot-forge.wim"
+      - "{{ forge_winpe_image_index }}"
+      - "--command=add '{{ storage.artifacts_dir }}/tmp/winpe-drivers' '\\Windows\\System32\\drivers\\forge'"
+  become: true
+  when: forge_wim_copied is changed
+  register: forge_wim_injected
+  changed_when: forge_wim_injected.rc == 0
+  tags: [windows, media]
+
+- name: Verify the drivers are present inside the image
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      wimlib-imagex dir "{{ storage.http_root }}/windows/boot-forge.wim" "{{ forge_winpe_image_index }}" \
+        | grep -ci '\\Windows\\System32\\drivers\\forge\\.*\.inf' || true
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  register: forge_wim_verify
+  tags: [windows, media, validation]
+
+- name: Assert the driver injection succeeded
+  ansible.builtin.assert:
+    that:
+      - (forge_wim_verify.stdout | trim | int) > 0
+    fail_msg: |
+      No .inf files found under \Windows\System32\drivers\forge inside
+      {{ storage.http_root }}/windows/boot-forge.wim.
+
+      Without them, WinPE boots but drvload has nothing to load:
+        * no viostor -> diskpart reports "There are no fixed disks to show"
+        * no NetKVM  -> wpeinit finds no NIC and the SMB mount times out
+
+      Rebuild with:
+        ansible-playbook playbooks/prepare-windows-media.yml -e winpe_force_rebuild=true
+
+      Inspect the image directly:
+        wimlib-imagex dir {{ storage.http_root }}/windows/boot-forge.wim {{ forge_winpe_image_index }} | grep -i forge
+    success_msg: "{{ forge_wim_verify.stdout | trim }} driver .inf file(s) injected into WinPE"
+  tags: [windows, media, validation]
+
+- name: Remove the driver staging directory
+  ansible.builtin.file:
+    path: "{{ storage.artifacts_dir }}/tmp/winpe-drivers"
+    state: absent
+  become: true
+  tags: [windows, media]

@@ -1,0 +1,14 @@
+---
+- name: Reload systemd unit files
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  listen: reload systemd
+
+- name: Restart the FORGE-AI dnsmasq instance
+  ansible.builtin.systemd_service:
+    name: "{{ pxe_dnsmasq_unit }}"
+    state: restarted
+    enabled: true
+  become: true
+  listen: restart dnsmasq

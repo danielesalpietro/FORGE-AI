@@ -1,0 +1,44 @@
+---
+# =====================================================================
+# FORGE-AI :: Windows target variables
+# =====================================================================
+# The connection settings (transport, port, scheme, certificate
+# validation) are derived from config/poc.yml by forge-inventory.py.
+# Only the credential lives here, and only by reference to the vault.
+# =====================================================================
+
+ansible_password: "{{ vault_windows_admin_password }}"
+
+# Windows targets are reached as a local administrator: no become.
+ansible_become: false
+
+# Ansible ships large PowerShell modules over WinRM; the defaults are
+# tight for a first connection on a freshly installed server.
+ansible_winrm_read_timeout_sec: 90
+ansible_winrm_operation_timeout_sec: 60
+
+# Read-only compliance probes, used by roles/drift_detection. These
+# supplement check mode, which several ansible.windows modules support
+# only partially. Each runs PowerShell and compares stdout to `expect`.
+forge_windows_probes:
+  - name: smbv1-disabled
+    command: "(Get-SmbServerConfiguration).EnableSMB1Protocol"
+    expect: "False"
+  - name: firewall-domain-profile
+    command: "(Get-NetFirewallProfile -Name Domain).Enabled"
+    expect: "True"
+  - name: firewall-public-profile
+    command: "(Get-NetFirewallProfile -Name Public).Enabled"
+    expect: "True"
+  - name: winrm-https-listener
+    command: "@(Get-ChildItem WSMan:\\localhost\\Listener | Where-Object { $_.Keys -contains 'Transport=HTTPS' }).Count"
+    expect: "1"
+  - name: winrm-basic-auth-disabled
+    command: "(Get-Item WSMan:\\localhost\\Service\\Auth\\Basic).Value"
+    expect: "false"
+  - name: rdp-denied
+    command: "(Get-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server').fDenyTSConnections"
+    expect: "{{ 0 if security.windows_rdp_enabled | default(false) else 1 }}"
+  - name: defender-service
+    command: "(Get-Service WinDefend).Status"
+    expect: "Running"

@@ -1,0 +1,127 @@
+---
+# =====================================================================
+# Semaphore Key Store
+# =====================================================================
+# Semaphore encrypts the key store at rest with
+# SEMAPHORE_ACCESS_KEY_ENCRYPTION. Secrets used by tasks belong here
+# rather than in Ansible Vault, because a Semaphore runner has no
+# vault password and asking it to hold one would defeat the point.
+#
+# The division of responsibility:
+#   Semaphore Key Store  -> secrets used by tasks Semaphore runs
+#   Ansible Vault        -> secrets used by tasks an operator runs
+#   GitHub Actions       -> only the Gitea sync credential
+# docs/SECURITY.md sets this out with the reasoning.
+# =====================================================================
+
+- name: List the existing keys
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/keys"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_keys
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops, security]
+
+- name: Create the SSH key entry for the Linux targets
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/keys"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "forge-ai-ssh"
+      type: ssh
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      ssh:
+        login: "{{ users.automation_user }}"
+        passphrase: ""
+        private_key: "{{ lookup('ansible.builtin.file', vault_ssh_private_key_path | expanduser) }}"
+    status_code: [201, 204]
+  when: forge_semaphore_keys.json | selectattr('name', 'eq', 'forge-ai-ssh') | list | length == 0
+  no_log: true
+  register: forge_semaphore_ssh_key
+  failed_when:
+    - forge_semaphore_ssh_key is failed
+    - "'No such file' not in (forge_semaphore_ssh_key.msg | default(''))"
+  tags: [bootstrap, gitops, security]
+
+- name: Create the login/password entry for the Windows targets
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/keys"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "forge-ai-windows"
+      type: login_password
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      login_password:
+        login: "{{ users.windows_admin_user }}"
+        password: "{{ vault_windows_admin_password }}"
+    status_code: [201, 204]
+  when:
+    - vault_windows_admin_password | default('') | length > 0
+    - forge_semaphore_keys.json | selectattr('name', 'eq', 'forge-ai-windows') | list | length == 0
+  no_log: true
+  tags: [bootstrap, gitops, security]
+
+- name: Create the vault password entry
+  # Lets a Semaphore-run playbook decrypt group_vars/all/vault.yml for
+  # the values that have no Key Store equivalent (the Ubuntu password
+  # hash, the state-service token).
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/keys"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "forge-ai-vault"
+      type: login_password
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      login_password:
+        login: "vault"
+        password: "{{ lookup('ansible.builtin.file', forge_repo_root ~ '/.vault-password') | trim }}"
+    status_code: [201, 204]
+  when: forge_semaphore_keys.json | selectattr('name', 'eq', 'forge-ai-vault') | list | length == 0
+  no_log: true
+  register: forge_semaphore_vault_key
+  failed_when:
+    - forge_semaphore_vault_key is failed
+    - "'No such file' not in (forge_semaphore_vault_key.msg | default(''))"
+  tags: [bootstrap, gitops, security]
+
+- name: Re-read the key store
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/keys"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_keys_final
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops, security]
+
+- name: Publish the key ids
+  ansible.builtin.set_fact:
+    forge_semaphore_key_ids: >-
+      {{ dict(forge_semaphore_keys_final.json | map(attribute='name')
+              | zip(forge_semaphore_keys_final.json | map(attribute='id'))) }}
+  tags: [bootstrap, gitops, security]
+
+- name: Report the key store contents
+  ansible.builtin.debug:
+    msg: >-
+      Semaphore Key Store: {{ forge_semaphore_key_ids.keys() | list | join(', ') }}.
+      No secret value is logged; only the entry names.
+  tags: [bootstrap, gitops, security]

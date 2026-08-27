@@ -1,0 +1,38 @@
+---
+# =====================================================================
+# FORGE-AI :: Linux target variables
+# =====================================================================
+
+ansible_become: true
+ansible_become_method: ansible.builtin.sudo
+
+# Private key matching security.ssh_authorized_keys. Created by
+# bootstrap/create-secrets.sh; the path is stored in the vault so the
+# key itself never enters Git.
+ansible_ssh_private_key_file: "{{ vault_ssh_private_key_path | default('~/.ssh/forge-ai-poc') }}"
+
+# The automation account is created by the autoinstall seed, so it
+# exists on the very first Ansible connection.
+forge_linux_admin_group: sudo
+
+# Compliance probes that do not rely on Ansible check mode. Each entry
+# runs a read-only command and compares the result to `expect`.
+# Consumed by roles/drift_detection.
+forge_linux_probes:
+  - name: ssh-root-login
+    command: "sshd -T"
+    filter: "permitrootlogin"
+    expect: "permitrootlogin {{ security.ssh_permit_root_login }}"
+  - name: ssh-password-auth
+    command: "sshd -T"
+    filter: "passwordauthentication"
+    expect: "passwordauthentication {{ security.ssh_password_authentication }}"
+  - name: qemu-guest-agent
+    command: "systemctl is-active qemu-guest-agent"
+    expect: "active"
+  - name: time-sync
+    command: "timedatectl show --property=NTPSynchronized --value"
+    expect: "yes"
+  - name: login-banner
+    command: "cat /etc/issue.net"
+    expect: "{{ baseline.ubuntu.banner_text }}"

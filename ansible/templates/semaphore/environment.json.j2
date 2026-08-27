@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "FORGE-AI :: Semaphore environment for the '{{ deployment.name }}' project.",
+    "Rendered from ansible/templates/semaphore/environment.json.j2.",
+    "",
+    "These become extra-vars on every task run in this environment.",
+    "NO SECRET BELONGS HERE: Semaphore stores the environment as plain",
+    "JSON in its database, unlike the Key Store which is encrypted with",
+    "SEMAPHORE_ACCESS_KEY_ENCRYPTION. Credentials go in the Key Store.",
+    "See docs/SECURITY.md."
+  ],
+  "forge_trigger": "semaphore",
+  "forge_environment": "{{ deployment.name }}",
+  "forge_boot_base_url": "{{ forge_boot_base_url }}",
+  "forge_repo_root": "{{ forge_repo_root }}",
+  "prereq_report_only": false,
+  "ipxe_reset_state": false,
+  "ipxe_reset_force": false,
+  "vm_lifecycle_recreate_disk": false,
+  "drift_fail_on_drift": false,
+  "windows_media_required": false,
+  "confirm_destroy": ""
+}

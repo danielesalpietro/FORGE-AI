@@ -1,0 +1,181 @@
+---
+# =====================================================================
+# ipxe_menu -- boot scripts and the host registry
+# =====================================================================
+# Produces three things:
+#
+#   1. boot.ipxe and menu.ipxe  -- the entry point and the fallback.
+#   2. host-<mac>-install.ipxe  -- one installer script per host.
+#   3. registry.json            -- what the state service reads to map a
+#                                 MAC to a host. Without it the service
+#                                 answers "unknown MAC" for everything.
+#
+# The state service, not this role, decides which script a given boot
+# actually receives. See compose/state-service/app.py.
+# =====================================================================
+
+- name: Render the iPXE entry point
+  ansible.builtin.template:
+    src: ipxe/boot.ipxe.j2
+    dest: "{{ storage.http_root }}/boot/boot.ipxe"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [provisioning, network]
+
+- name: Render the fallback menu
+  ansible.builtin.template:
+    src: ipxe/menu.ipxe.j2
+    dest: "{{ storage.http_root }}/boot/menu.ipxe"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [provisioning, network]
+
+- name: Render the per-host Ubuntu installer scripts
+  ansible.builtin.template:
+    src: ipxe/host-ubuntu-install.ipxe.j2
+    dest: "{{ storage.http_root }}/boot/host-{{ item.mac_address | mac_hyphen }}-install.ipxe"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'linux') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, network, linux]
+
+- name: Render the per-host Windows installer scripts
+  ansible.builtin.template:
+    src: ipxe/host-windows-install.ipxe.j2
+    dest: "{{ storage.http_root }}/boot/host-{{ item.mac_address | mac_hyphen }}-install.ipxe"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_hosts | selectattr('os_family', 'eq', 'windows') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, network, windows]
+
+# ---------------------------------------------------------------------
+# Host registry consumed by the state service
+# ---------------------------------------------------------------------
+- name: Write the host registry
+  ansible.builtin.copy:
+    content: "{{ registry | to_nice_json }}\n"
+    dest: "{{ storage.state_dir }}/registry.json"
+    owner: "10001"
+    group: "10001"
+    mode: "0640"
+  become: true
+  vars:
+    registry:
+      generated_at: "{{ ansible_date_time.iso8601 }}"
+      deployment_id: "{{ forge_deployment_id }}"
+      git_commit: "{{ forge_git_commit }}"
+      hosts: >-
+        {{ dict(forge_hosts | map(attribute='mac_address') | map('mac_hyphen')
+                | zip(forge_hosts | map('dict2items')
+                      | map('rejectattr', 'key', 'in', ['description'])
+                      | map('items2dict'))) }}
+  tags: [provisioning, network]
+
+- name: Read the current lifecycle state of every host
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/api/state/{{ item.mac_address | mac_hyphen }}"
+    method: GET
+    return_content: true
+    status_code: [200]
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_current_states
+  failed_when: false
+  changed_when: false
+  tags: [provisioning, network, validation]
+
+- name: Report the lifecycle state of every host
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }} ({{ item.item.mac_address }}):
+      {{ (item.json.state | default('unreachable')) }}
+      after {{ item.json.attempts | default(0) }} install attempt(s)
+  loop: "{{ forge_current_states.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  tags: [provisioning, network, validation]
+
+- name: Reset the lifecycle state so the next boot installs
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/api/state/{{ item.item.mac_address | mac_hyphen }}"
+    method: POST
+    body_format: json
+    body:
+      state: new
+      source: ansible-ipxe-menu
+      host: "{{ item.item.name }}"
+      detail: "reset by {{ forge_operator }} for deployment {{ forge_deployment_id }}"
+    headers: "{{ {'X-Forge-Token': forge_state_token} if forge_state_token | length > 0 else {} }}"
+    status_code: [200]
+  loop: "{{ forge_current_states.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - ipxe_reset_state | bool
+    - ipxe_reset_force | bool or (item.json.state | default('new')) in ipxe_reset_states
+  tags: [provisioning, network]
+
+- name: Warn about hosts left untouched by the reset
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }} is in state '{{ item.json.state | default('unknown') }}' and was
+      NOT reset: that would queue a reinstall of a working machine. Pass
+      -e ipxe_reset_force=true if a rebuild is genuinely intended.
+  loop: "{{ forge_current_states.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - ipxe_reset_state | bool
+    - not ipxe_reset_force | bool
+    - (item.json.state | default('new')) not in ipxe_reset_states
+  tags: [provisioning, network]
+
+# ---------------------------------------------------------------------
+# Prove the dispatch path end to end
+# ---------------------------------------------------------------------
+- name: Fetch the dispatch script the state service would serve
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/state/{{ item.mac_address | mac_hyphen }}.ipxe"
+    method: GET
+    return_content: true
+    status_code: [200]
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_dispatch_check
+  changed_when: false
+  failed_when: false
+  tags: [provisioning, network, validation]
+
+- name: Assert that every host receives a valid iPXE script
+  ansible.builtin.assert:
+    that:
+      - item.status | default(0) == 200
+      - item.content | default('') is search('^#!ipxe')
+    fail_msg: >-
+      {{ item.item.name }}: the state service did not return a usable iPXE script
+      from {{ forge_boot_base_url }}/state/{{ item.item.mac_address | mac_hyphen }}.ipxe
+      (HTTP {{ item.status | default('no response') }}).
+      Check `docker compose logs state` and that registry.json is readable by UID 10001.
+    success_msg: "{{ item.item.name }}: dispatch script served"
+  loop: "{{ forge_dispatch_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  tags: [provisioning, network, validation]

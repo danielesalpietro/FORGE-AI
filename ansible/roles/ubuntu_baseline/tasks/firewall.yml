@@ -1,0 +1,79 @@
+---
+# =====================================================================
+# Host firewall (ufw)
+# =====================================================================
+# Default deny inbound, allow outbound, with SSH scoped to
+# security.management_cidrs rather than "anywhere".
+#
+# Ordering matters and is easy to get wrong: enabling ufw with a default
+# deny policy BEFORE the SSH allow rule exists locks Ansible out of the
+# host mid-play. The allow rule therefore goes in first.
+# =====================================================================
+
+- name: Allow SSH from the management networks
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ item }}"
+    comment: "FORGE-AI management access"
+  become: true
+  loop: "{{ security.management_cidrs }}"
+  tags: [linux, security]
+
+# ICMP is deliberately NOT configured with a ufw rule: the module only
+# accepts ah/esp/gre/igmp/ipv6/tcp/udp/vrrp, and ufw already permits
+# inbound echo-request in /etc/ufw/before.rules regardless of the
+# default policy. A `proto: icmp` rule here would simply fail.
+# The smoke test and wait-for-ssh.sh both ping before trying SSH, so
+# this is verified rather than assumed -- see the assertion below.
+
+- name: Set the default incoming policy
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+  become: true
+  notify: reload ufw
+  tags: [linux, security]
+
+- name: Set the default outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+  become: true
+  notify: reload ufw
+  tags: [linux, security]
+
+- name: Set the default routed policy
+  community.general.ufw:
+    direction: routed
+    policy: deny
+  become: true
+  notify: reload ufw
+  tags: [linux, security]
+
+- name: Enable ufw with logging
+  community.general.ufw:
+    state: enabled
+    logging: "low"
+  become: true
+  tags: [linux, security]
+
+- name: Read the effective firewall state
+  ansible.builtin.command: ufw status verbose
+  become: true
+  changed_when: false
+  register: forge_ufw_status
+  tags: [linux, security, validation]
+
+- name: Assert the firewall is active and denying by default
+  ansible.builtin.assert:
+    that:
+      - "'Status: active' in forge_ufw_status.stdout"
+      - "'deny (incoming)' in forge_ufw_status.stdout"
+      - "'allow (outgoing)' in forge_ufw_status.stdout"
+    fail_msg: |-
+      ufw is not active with a default-deny inbound policy. Current state:
+      {{ forge_ufw_status.stdout }}
+    success_msg: "ufw active, default deny inbound, SSH scoped to {{ security.management_cidrs | join(', ') }}"
+  tags: [linux, security, validation]

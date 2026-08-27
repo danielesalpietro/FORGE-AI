@@ -1,0 +1,106 @@
+---
+# =====================================================================
+# Rogue / competing DHCP server probe
+# =====================================================================
+# Running a second DHCP server on a network that already has one is the
+# single most damaging mistake this project can make on someone's LAN:
+# it hands wrong addresses to machines that have nothing to do with the
+# PoC, and the failure is intermittent, so it gets blamed on everything
+# except DHCP.
+#
+# The probe is deliberately passive. It listens for DHCP traffic on the
+# provisioning bridge; it never broadcasts a DISCOVER of its own, which
+# would itself be a change to a network we have not yet been cleared to
+# touch.
+#
+# It can only see traffic on a bridge that already exists. On a first
+# run the bridge is absent, and the probe reports that honestly rather
+# than claiming the network is clean.
+# =====================================================================
+
+- name: Check whether the provisioning bridge exists yet
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ provisioning_network.bridge }}"
+  register: forge_dhcp_bridge
+  tags: [validation, network]
+
+- name: Note that the DHCP probe cannot run before the bridge exists
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    finding:
+      severity: info
+      check: dhcp-conflict
+      detail: >-
+        Bridge {{ provisioning_network.bridge }} does not exist yet, so no passive
+        DHCP probe was possible. It will be created isolated from the host LAN,
+        which is what makes this safe. Re-run `make check` after
+        `make deploy-control-plane` for a real measurement.
+  when: not forge_dhcp_bridge.stat.exists
+  tags: [validation, network]
+
+- name: Listen for foreign DHCP traffic on the provisioning bridge
+  # tcpdump exits 0 with no packets captured, so a clean network and a
+  # successful capture are distinguished by the packet count, not by rc.
+  ansible.builtin.command:
+    argv:
+      - tcpdump
+      - -i
+      - "{{ provisioning_network.bridge }}"
+      - -n
+      - -c
+      - "5"
+      - -W
+      - "1"
+      - -G
+      - "{{ prereq_dhcp_probe_timeout }}"
+      - --immediate-mode
+      - "udp port 67 or udp port 68"
+  become: true
+  changed_when: false
+  failed_when: false
+  register: forge_dhcp_probe
+  when: forge_dhcp_bridge.stat.exists
+  tags: [validation, network]
+
+- name: Identify which DHCP servers answered
+  ansible.builtin.set_fact:
+    forge_dhcp_servers: >-
+      {{ (forge_dhcp_probe.stderr | default('') ~ forge_dhcp_probe.stdout | default(''))
+         | regex_findall('(\d+\.\d+\.\d+\.\d+)\.(?:67|bootps)')
+         | unique }}
+  when: forge_dhcp_bridge.stat.exists
+  tags: [validation, network]
+
+- name: Record a competing DHCP server
+  ansible.builtin.set_fact:
+    forge_prereq_findings: "{{ forge_prereq_findings + [finding] }}"
+  vars:
+    foreign: "{{ forge_dhcp_servers | default([]) | reject('equalto', provisioning_network.gateway) | list }}"
+    finding:
+      severity: error
+      check: dhcp-conflict
+      detail: >-
+        DHCP server(s) other than the FORGE-AI one answered on
+        {{ provisioning_network.bridge }}: {{ foreign | join(', ') }}.
+        Two DHCP servers on one segment make PXE fail intermittently and can hand
+        addresses to machines outside this PoC.
+        Investigate with:
+          sudo tcpdump -i {{ provisioning_network.bridge }} -n 'udp port 67 or udp port 68'
+        Then either stop the other server or move FORGE-AI to a different bridge.
+        Override only if you are certain: -e forge_force=true.
+  when:
+    - forge_dhcp_bridge.stat.exists
+    - forge_dhcp_servers | default([]) | reject('equalto', provisioning_network.gateway) | list | length > 0
+    - not forge_force | bool
+  tags: [validation, network]
+
+- name: Confirm the provisioning segment is clean
+  ansible.builtin.debug:
+    msg: >-
+      No competing DHCP server observed on {{ provisioning_network.bridge }}
+      during a {{ prereq_dhcp_probe_timeout }}s passive capture.
+  when:
+    - forge_dhcp_bridge.stat.exists
+    - forge_dhcp_servers | default([]) | reject('equalto', provisioning_network.gateway) | list | length == 0
+  tags: [validation, network]
