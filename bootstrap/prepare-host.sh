@@ -123,6 +123,17 @@ readonly -a PACKAGES_TOOLING=(
     python3-lxml
     python3-libvirt
     make
+    # libvirt-python is published to PyPI as a source distribution only --
+    # there is no wheel -- so `pip install -r requirements-python.txt`
+    # compiles it, and that needs libvirt.pc (libvirt-dev), pkg-config,
+    # the Python headers and a compiler. Without these the bootstrap
+    # fails partway through on a host that has everything else it needs,
+    # with a pkg-config error that says nothing about which package to
+    # install. Found on a fresh Ubuntu Server 24.04.
+    pkg-config
+    libvirt-dev
+    python3-dev
+    gcc
 )
 
 check_distribution() {
