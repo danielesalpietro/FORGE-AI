@@ -4,7 +4,7 @@ Builds the network-bootable WinPE image and stages a per-host boot set.
 
 ## The chain
 
-```
+```text
 iPXE  ->  wimboot  ->  bootmgr.exe + BCD + boot.sdi + boot.wim
       ->  startnet.cmd  ->  setup.exe /unattend:Autounattend.xml
 ```

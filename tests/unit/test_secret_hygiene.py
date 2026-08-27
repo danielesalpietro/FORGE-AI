@@ -130,21 +130,22 @@ def test_the_vault_example_is_tracked_and_holds_only_placeholders(tracked_text):
 
 # Patterns that indicate a real credential rather than a placeholder or
 # a variable reference.
+# Each pattern is built from fragments rather than written literally, so
+# that this file -- which is itself tracked -- does not contain the very
+# markers it searches for. Without that, the scanner flags itself, and
+# the usual "fix" is a blanket exclusion that quietly weakens it.
 SECRET_PATTERNS = [
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "an inlined private key"),
-    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "an AWS access key id"),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"), "a GitHub token"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "a Slack token"),
-    (re.compile(r"\$ANSIBLE_VAULT;"), "an Ansible Vault payload"),
+    (re.compile("-----BEGIN [A-Z ]*PRIVATE" + " KEY-----"), "an inlined private key"),
+    (re.compile(r"\bAK" + r"IA[0-9A-Z]{16}\b"), "an AWS access key id"),
+    (re.compile(r"\bgh" + r"[pousr]_[A-Za-z0-9]{36,}"), "a GitHub token"),
+    (re.compile(r"\bxo" + r"x[baprs]-[A-Za-z0-9-]{10,}"), "a Slack token"),
+    (re.compile(r"\$ANSIBLE_" + r"VAULT;"), "an Ansible Vault payload"),
 ]
 
 
 def test_no_tracked_file_contains_an_obvious_credential(tracked_text):
     offenders = []
     for path, text in tracked_text:
-        # This test file necessarily contains the patterns it searches for.
-        if path.name == "test_secret_hygiene.py":
-            continue
         for pattern, description in SECRET_PATTERNS:
             if pattern.search(text):
                 offenders.append((path.relative_to(REPO_ROOT).as_posix(), description))

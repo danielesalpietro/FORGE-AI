@@ -7,7 +7,7 @@ installer can actually fetch it.
 
 The seed is served at:
 
-```
+```text
 http://192.168.250.1:8080/ubuntu/poc-ubuntu-01/
 ```
 

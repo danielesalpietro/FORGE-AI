@@ -1,0 +1,19 @@
+# =====================================================================
+# FORGE-AI :: boot binary checksums -- EXAMPLE
+# =====================================================================
+# The real file is written to /srv/forge-ai/tftp/checksums.sha256 by
+# scripts/download-ipxe-assets.sh, recording what is actually being
+# served on this host. It is not committed, because the values depend on
+# which Ubuntu package version or which iPXE tag produced them.
+#
+# Verify with:
+#   ./scripts/verify-checksums.sh
+#   cd /srv/forge-ai/tftp && sha256sum -c checksums.sha256
+#
+# The format is sha256sum's own, so `sha256sum -c` works directly.
+# =====================================================================
+
+# Example only. Do NOT copy these values -- they will not match your build.
+# 0000000000000000000000000000000000000000000000000000000000000000  undionly.kpxe
+# 0000000000000000000000000000000000000000000000000000000000000000  ipxe.efi
+# 0000000000000000000000000000000000000000000000000000000000000000  wimboot

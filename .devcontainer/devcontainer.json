@@ -1,0 +1,108 @@
+{
+  "name": "FORGE-AI development",
+
+  "//": [
+    "A container for WORKING ON this repository: linting, unit tests,",
+    "template rendering and documentation. It deliberately cannot deploy",
+    "anything -- there is no /dev/kvm inside a devcontainer, so the",
+    "provisioning path needs a real Ubuntu 24.04 host. See",
+    "docs/QUICKSTART.md.",
+    "",
+    "What works here: make validate, make lint, make test, make render.",
+    "What does not: make bootstrap, make provision, anything touching",
+    "libvirt."
+  ],
+
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12",
+      "installTools": true
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+
+  "postCreateCommand": ".devcontainer/post-create.sh",
+
+  "remoteUser": "vscode",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "redhat.ansible",
+        "redhat.vscode-yaml",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "timonwong.shellcheck",
+        "foxundermoon.shell-format",
+        "ms-azuretools.vscode-docker",
+        "davidanson.vscode-markdownlint",
+        "samuelcolvin.jinjahtml",
+        "bierner.markdown-mermaid"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
+
+        "ansible.python.interpreterPath": "/usr/local/bin/python",
+        "ansible.validation.lint.enabled": true,
+        "ansible.validation.lint.path": "ansible-lint",
+
+        "yaml.customTags": [
+          "!vault scalar"
+        ],
+        "yaml.schemas": {
+          "./config/schema/poc.schema.json": ["config/poc*.yml"]
+        },
+
+        "files.associations": {
+          "*.j2": "jinja",
+          "*.ipxe": "shellscript",
+          "*.bats": "shellscript"
+        },
+
+        "[yaml]": {
+          "editor.tabSize": 2,
+          "editor.insertSpaces": true,
+          "editor.detectIndentation": false
+        },
+        "[python]": {
+          "editor.rulers": [100]
+        },
+        "[shellscript]": {
+          "editor.tabSize": 4
+        },
+
+        "shellcheck.customArgs": ["-x", "-P", "bootstrap:.:scripts"],
+        "editor.renderWhitespace": "trailing",
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true
+      }
+    }
+  },
+
+  "mounts": [
+    "source=forge-ai-venv,target=${containerWorkspaceFolder}/.venv,type=volume"
+  ],
+
+  "containerEnv": {
+    "ANSIBLE_FORCE_COLOR": "1",
+    "PY_COLORS": "1",
+    "FORGE_DEVCONTAINER": "1"
+  },
+
+  "forwardPorts": [],
+
+  "portsAttributes": {}
+}

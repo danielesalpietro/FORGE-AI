@@ -90,9 +90,14 @@ jobs:
             echo "$offenders"
             exit 1
           fi
-          # A vault payload anywhere at all means something was
-          # committed that should not have been.
-          if git grep -l '\$ANSIBLE_VAULT;' -- ':!tests/unit/test_secret_hygiene.py' 2>/dev/null; then
+          # A vault payload anywhere at all means something was committed
+          # that should not have been.
+          #
+          # The pattern is written with a character class so that THIS
+          # file does not contain the literal marker. A scanner that
+          # trips on itself gets an exclusion added, and the exclusion is
+          # what quietly weakens it later.
+          if git grep -lE '[$]ANSIBLE_VAUL[T];' 2>/dev/null; then
             echo "::error::an Ansible Vault payload is present in a tracked file"
             exit 1
           fi

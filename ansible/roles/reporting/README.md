@@ -35,7 +35,7 @@ link is omitted rather than rendered broken.
 
 ## Output
 
-```
+```text
 /srv/forge-ai/reports/
   deployment-<id>.json
   deployment-<id>.md

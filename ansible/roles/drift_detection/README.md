@@ -28,7 +28,7 @@ mode support. `docs/OPERATIONS.md` sets out the limitations.
 
 ## Output
 
-```
+```text
 /srv/forge-ai/reports/drift/
   drift-<deployment-id>.json     machine-readable
   drift-<deployment-id>.md       human-readable

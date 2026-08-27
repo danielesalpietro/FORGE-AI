@@ -19,7 +19,7 @@ in the run output, so the change is never silent.
 `ansible/templates/dnsmasq/provisioning.conf.j2` encodes the whole
 decision:
 
-```
+```text
 dhcp-match=set:efi64,option:client-arch,9      # arch detection (RFC 4578)
 dhcp-match=set:ipxe,175                        # iPXE encapsulated options
 dhcp-userclass=set:ipxe,iPXE                   # iPXE user-class
