@@ -1,0 +1,36 @@
+# =====================================================================
+# FORGE-AI :: Trivy misconfiguration suppressions
+# =====================================================================
+# Every entry here is a deliberate exception with a reason. Nothing is
+# suppressed to make a check go green.
+#
+# Passed explicitly to the scan via the `trivyignores` input in
+# .github/workflows/security.yml rather than relying on Trivy finding
+# this file on its own.
+#
+# ---------------------------------------------------------------------
+# DS-0002  "Image user should not be 'root'"
+#
+#   Triggered by compose/samba/Dockerfile, which has no USER because
+#   smbd must be root to bind port 445 and to switch to the guest
+#   account. This is the one container in the stack that runs as root,
+#   it is documented in docs/SECURITY.md, and the share it serves is
+#   read-only, anonymous and carries no secret -- the per-host answer
+#   file travels through wimboot, never through SMB.
+#
+#   Suppressing this by id is global rather than path-scoped, and that
+#   is acceptable here because the Dockerfile text is NOT the control.
+#   The control is the "Confirm the image does not run as root" step in
+#   the containers job: it inspects the BUILT image and fails for
+#   state-service and webhook, allowing only samba by name. That check
+#   is strictly stronger than this rule -- it would catch a root user
+#   arriving from a base image, which reading the Dockerfile cannot.
+#
+#   Both spellings are listed because Trivy reports this rule as
+#   `DS-0002` in its own output and as `AVD-DS-0002` in SARIF, and the
+#   project documentation is not reachable from this environment to
+#   settle which form the ignore file matches. An id that matches
+#   nothing is a no-op, so listing both is safe; the next run's
+#   "Name the configuration findings" step reports whether it took.
+DS-0002
+AVD-DS-0002

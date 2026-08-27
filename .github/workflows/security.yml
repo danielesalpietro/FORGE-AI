@@ -230,6 +230,10 @@ jobs:
           format: sarif
           output: trivy-config.sarif
           severity: CRITICAL,HIGH
+          # Named explicitly rather than relying on Trivy discovering
+          # the file itself. Read .trivyignore: every suppression in it
+          # carries the reason it exists.
+          trivyignores: .trivyignore
 
       - name: Upload the configuration findings
         if: always()
