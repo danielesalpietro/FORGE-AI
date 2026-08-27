@@ -1,0 +1,191 @@
+<#
+    =====================================================================
+    FORGE-AI :: WinRM over HTTPS bootstrap for {{ host.name }}
+    Rendered from ansible/templates/windows/Configure-WinRM.ps1.j2
+    Executed once by SetupComplete.cmd, as SYSTEM.
+    =====================================================================
+    Deployment : {{ forge_deployment_id | default('manual') }}
+    Commit     : {{ forge_git_commit | default('unknown') }}
+
+    What it establishes:
+      * an HTTPS listener on {{ security.winrm_port }} with a self-signed
+        certificate whose CN matches the host name and whose SANs cover
+        the reserved IP;
+      * Negotiate/NTLM authentication only - Basic and unencrypted
+        transport stay off;
+      * firewall rules scoped to {{ security.management_cidrs | join(', ') }}
+        rather than "Any".
+
+    PoC boundary: the certificate is self-signed, so the Ansible side
+    runs with ansible_winrm_server_cert_validation =
+    "{{ security.winrm_cert_validation }}". Moving to "validate" means
+    issuing the certificate from a CA the runner trusts; the procedure
+    is in docs/SECURITY.md. Kerberos with a domain-joined host is the
+    documented production evolution.
+#>
+
+[CmdletBinding()]
+param(
+    [int]    $Port           = {{ security.winrm_port }},
+    [string] $HostName       = '{{ host.name }}',
+    [string] $IpAddress      = '{{ host.ip_address }}',
+    [string] $Dns            = '{{ host.name }}.{{ environment.domain }}',
+    [int]    $CertValidYears = {{ winrm_cert_valid_years | default(2) }}
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+Set-StrictMode -Version Latest
+
+function Write-Step { param([string]$Message) Write-Output ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $Message) }
+
+try {
+    # -----------------------------------------------------------------
+    # 1. Service
+    # -----------------------------------------------------------------
+    Write-Step 'Starting and enabling WinRM'
+    Set-Service -Name WinRM -StartupType Automatic
+    Start-Service -Name WinRM
+
+    # Enable-PSRemoting creates the HTTP listener too; -SkipNetworkProfileCheck
+    # is needed because the provisioning NIC is still "Public" at this
+    # point in the installation.
+    Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
+
+    # -----------------------------------------------------------------
+    # 2. Certificate
+    # -----------------------------------------------------------------
+    Write-Step "Creating a self-signed certificate for $HostName"
+    $dnsNames = @($HostName, $Dns, $IpAddress) | Where-Object { $_ } | Select-Object -Unique
+    $cert = New-SelfSignedCertificate `
+        -Subject "CN=$HostName" `
+        -DnsName $dnsNames `
+        -CertStoreLocation 'Cert:\LocalMachine\My' `
+        -KeyExportPolicy NonExportable `
+        -KeyLength 2048 `
+        -KeyAlgorithm RSA `
+        -HashAlgorithm SHA256 `
+        -KeyUsage DigitalSignature, KeyEncipherment `
+        -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.1') `
+        -NotAfter (Get-Date).AddYears($CertValidYears)
+
+    Write-Step "Certificate thumbprint: $($cert.Thumbprint)"
+
+    # -----------------------------------------------------------------
+    # 3. Listener - replace any pre-existing HTTPS listener so reruns
+    #    are idempotent rather than additive.
+    # -----------------------------------------------------------------
+    Write-Step "Configuring the HTTPS listener on port $Port"
+    Get-ChildItem -Path WSMan:\localhost\Listener |
+        Where-Object { $_.Keys -contains 'Transport=HTTPS' } |
+        ForEach-Object { Remove-Item -Path $_.PSPath -Recurse -Force }
+
+    New-Item -Path WSMan:\localhost\Listener `
+        -Transport HTTPS `
+        -Address * `
+        -CertificateThumbPrint $cert.Thumbprint `
+        -HostName $HostName `
+        -Port $Port `
+        -Force | Out-Null
+
+{% if security.winrm_transport == 'https' %}
+    # The plaintext HTTP listener has no purpose once HTTPS works.
+    Write-Step 'Removing the HTTP listener'
+    Get-ChildItem -Path WSMan:\localhost\Listener |
+        Where-Object { $_.Keys -contains 'Transport=HTTP' } |
+        ForEach-Object { Remove-Item -Path $_.PSPath -Recurse -Force }
+{% endif %}
+
+    # -----------------------------------------------------------------
+    # 4. Authentication and transport policy
+    # -----------------------------------------------------------------
+    Write-Step 'Hardening authentication'
+    Set-Item -Path WSMan:\localhost\Service\Auth\Basic       -Value $false
+    Set-Item -Path WSMan:\localhost\Service\Auth\Negotiate   -Value $true
+    Set-Item -Path WSMan:\localhost\Service\Auth\Kerberos    -Value $true
+    Set-Item -Path WSMan:\localhost\Service\Auth\CredSSP     -Value $false
+    Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $false
+    Set-Item -Path WSMan:\localhost\Client\Auth\Basic        -Value $false
+
+    # Ansible ships large modules over WinRM; the 150 MB default in
+    # older builds is not always applied.
+    Set-Item -Path WSMan:\localhost\MaxTimeoutms                 -Value {{ winrm_max_timeout_ms | default(1800000) }}
+    Set-Item -Path WSMan:\localhost\Shell\MaxMemoryPerShellMB    -Value {{ winrm_max_memory_mb | default(1024) }}
+    Set-Item -Path WSMan:\localhost\Shell\MaxShellsPerUser       -Value {{ winrm_max_shells | default(30) }}
+
+    # -----------------------------------------------------------------
+    # 5. Firewall - scoped, not "Any"
+    # -----------------------------------------------------------------
+    Write-Step 'Applying scoped firewall rules'
+    $managementScopes = @({% for cidr in security.management_cidrs %}'{{ cidr }}'{{ ',' if not loop.last }}{% endfor %})
+
+    # Windows creates broad WinRM rules by default; disable them and put
+    # a scoped rule in their place.
+    Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue |
+        Disable-NetFirewallRule
+    Remove-NetFirewallRule -DisplayName 'FORGE-AI WinRM HTTPS' -ErrorAction SilentlyContinue
+
+    New-NetFirewallRule `
+        -DisplayName 'FORGE-AI WinRM HTTPS' `
+        -Name 'FORGE-AI-WinRM-HTTPS-In' `
+        -Direction Inbound `
+        -Action Allow `
+        -Protocol TCP `
+        -LocalPort $Port `
+        -RemoteAddress $managementScopes `
+        -Profile Any `
+        -Description 'Ansible/Semaphore management access (FORGE-AI PoC)' | Out-Null
+
+    # ICMP echo makes wait-for-winrm.sh and the smoke tests meaningful.
+    Remove-NetFirewallRule -DisplayName 'FORGE-AI ICMP' -ErrorAction SilentlyContinue
+    New-NetFirewallRule `
+        -DisplayName 'FORGE-AI ICMP' `
+        -Name 'FORGE-AI-ICMPv4-In' `
+        -Direction Inbound `
+        -Action Allow `
+        -Protocol ICMPv4 `
+        -IcmpType 8 `
+        -RemoteAddress $managementScopes `
+        -Profile Any | Out-Null
+
+{% if not security.windows_rdp_enabled | default(false) %}
+    Write-Step 'Ensuring Remote Desktop stays disabled'
+    Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 1
+    Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+{% endif %}
+
+    # -----------------------------------------------------------------
+    # 6. Prove the listener actually answers before declaring success.
+    # -----------------------------------------------------------------
+    Write-Step 'Verifying the listener'
+    Restart-Service -Name WinRM -Force
+    Start-Sleep -Seconds 5
+
+    $probe = Test-NetConnection -ComputerName '127.0.0.1' -Port $Port -WarningAction SilentlyContinue
+    if (-not $probe.TcpTestSucceeded) {
+        throw "WinRM HTTPS listener is not accepting connections on port $Port"
+    }
+
+    $listeners = Get-ChildItem -Path WSMan:\localhost\Listener |
+        Where-Object { $_.Keys -contains 'Transport=HTTPS' }
+    if (-not $listeners) {
+        throw 'No HTTPS listener present after configuration'
+    }
+
+    Write-Step 'WinRM over HTTPS is ready'
+    New-Item -Path 'C:\ProgramData\forge-ai' -ItemType Directory -Force | Out-Null
+    [ordered]@{
+        configured_at = (Get-Date).ToString('o')
+        thumbprint    = $cert.Thumbprint
+        port          = $Port
+        dns_names     = $dnsNames
+        scopes        = $managementScopes
+    } | ConvertTo-Json | Set-Content -Path 'C:\ProgramData\forge-ai\winrm.json' -Encoding UTF8
+
+    exit 0
+}
+catch {
+    Write-Output "[error] $($_.Exception.Message)"
+    Write-Output $_.ScriptStackTrace
+    exit 1
+}

@@ -1,0 +1,59 @@
+#!ipxe
+# =====================================================================
+# FORGE-AI :: interactive fallback / rescue menu
+# Reached when a client has no provisioning state, or when the operator
+# interrupts the automatic path. Rendered from
+# ansible/templates/ipxe/menu.ipxe.j2
+# =====================================================================
+
+set base {{ forge_boot_base_url }}
+set timeout {{ pxe.menu_timeout_ms }}
+
+:menu
+menu FORGE-AI provisioning -- {{ environment.name }} -- ${net0/mac}
+item --gap --             Automated profiles
+{% for host in hosts %}
+item host-{{ loop.index }}   Install {{ host.profile }} as {{ host.name }} ({{ host.ip_address }})
+{% endfor %}
+item --gap --             Diagnostics
+item rescue               Rescue shell (iPXE)
+item netinfo              Show network configuration
+item reboot               Reboot
+item --gap --             Default
+item local                Boot from local disk  [default]
+choose --default local --timeout ${timeout} selection || goto local
+goto ${selection}
+
+{% for host in hosts %}
+:host-{{ loop.index }}
+echo Chaining installer for {{ host.name }} ({{ host.profile }})
+chain --autofree ${base}/boot/host-{{ host.mac_address | replace(':', '-') }}-install.ipxe || goto failed
+{% endfor %}
+
+:netinfo
+echo
+ifstat
+route
+echo
+echo Boot server: ${base}
+echo Press any key to return to the menu.
+prompt
+goto menu
+
+:rescue
+echo Type 'exit' to return to the menu.
+shell
+goto menu
+
+:reboot
+reboot
+
+:local
+echo Booting from local disk (drive 0x80)...
+sanboot --no-describe --drive 0x80 || goto failed
+
+:failed
+echo
+echo [error] Boot attempt failed. Returning to the menu.
+prompt --timeout 10000 Press a key...
+goto menu

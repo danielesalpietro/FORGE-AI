@@ -1,0 +1,65 @@
+#!ipxe
+# =====================================================================
+# FORGE-AI :: Windows Server WinPE boot script
+# Host: {{ host.name }} ({{ host.mac_address }} / {{ host.ip_address }})
+# Rendered from ansible/templates/ipxe/host-windows-install.ipxe.j2
+# =====================================================================
+# Flow: iPXE -> wimboot -> WinPE (boot.wim + BCD + boot.sdi)
+#       -> startnet.cmd -> Install-Windows.ps1
+#       -> setup.exe /unattend:Autounattend.xml
+#
+# wimboot is the iPXE project's Windows Imaging loader. Its licence and
+# attribution are recorded in THIRD_PARTY_NOTICES.md.
+#
+# No Microsoft binary is stored in this repository: boot.wim, BCD and
+# boot.sdi are extracted on the KVM host from the operator-supplied
+# Windows Server ISO by ansible/roles/windows_winpe.
+
+set base {{ forge_boot_base_url }}
+set winroot ${base}/windows/{{ host.name }}
+set hostname {{ host.name }}
+
+echo
+echo [{{ host.name }}] Windows Server unattended installation (WinPE)
+echo   WinPE root : ${winroot}
+echo   Edition    : {{ media.windows.image_name | default('index ' ~ media.windows.image_index) }}
+echo
+
+kernel ${base}/wimboot/wimboot gui || goto failed
+
+# The names on the left are what WinPE's boot loader looks for; the
+# 'gui' flag above keeps the Windows boot animation instead of a blank
+# screen, which makes PXE failures far easier to diagnose.
+imgfetch --name bootmgr    ${winroot}/bootmgr.exe          bootmgr    || goto failed
+imgfetch --name bcd        ${winroot}/BCD                  BCD        || goto failed
+imgfetch --name boot.sdi   ${winroot}/boot.sdi             boot.sdi   || goto failed
+imgfetch --name boot.wim   ${winroot}/boot.wim             boot.wim   || goto failed
+
+# ---------------------------------------------------------------------
+# Per-host file injection
+# ---------------------------------------------------------------------
+# wimboot injects any file beyond bootmgr/BCD/boot.sdi/*.wim into
+# \Windows\System32\ inside the booted WinPE image. That is how this
+# host gets its own startnet.cmd and its own answer file without ever
+# writing them to a shared, world-readable location on the KVM host and
+# without needing an SMB mount before the network is up.
+imgfetch --name startnet.cmd     ${winroot}/startnet.cmd     startnet.cmd     || goto failed
+imgfetch --name Autounattend.xml ${winroot}/Autounattend.xml Autounattend.xml || goto failed
+
+boot || goto failed
+
+:failed
+echo
+echo [error] {{ host.name }}: WinPE failed to load.
+echo         Verify with curl -I from the KVM host:
+echo           ${base}/wimboot/wimboot
+echo           ${winroot}/boot.wim
+echo         A 404 on boot.wim means 'make prepare-media' has not run,
+echo         or media.windows.iso_path is not set in config/poc.yml.
+echo         See docs/TROUBLESHOOTING.md ("Windows cannot load VirtIO disk").
+params
+param mac ${net0/mac}
+param event install-boot-failed
+imgfetch --name failnote ${base}/api/log##params || echo [warn] state service unreachable
+prompt --timeout 20000 Press a key to drop to the iPXE shell...
+shell

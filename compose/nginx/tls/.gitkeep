@@ -1,0 +1,12 @@
+TLS material for the control-plane proxy is generated at bootstrap time
+into this directory and is git-ignored:
+
+  forge-ai.crt   self-signed certificate (or your CA-issued certificate)
+  forge-ai.key   private key, mode 0600
+
+Generate or regenerate with:
+
+  ./bootstrap/create-secrets.sh --tls-only
+
+Replacing the self-signed pair with a CA-issued one is a straight file
+swap; nothing else in the stack needs to change. See docs/SECURITY.md.

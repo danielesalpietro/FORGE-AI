@@ -1,0 +1,93 @@
+@echo off
+rem =====================================================================
+rem FORGE-AI :: Windows post-install bootstrap for {{ host.name }}
+rem Placed at C:\Windows\Setup\Scripts\SetupComplete.cmd by the
+rem specialize pass; Windows Setup runs it once, as SYSTEM, after the
+rem last reboot of the installation and before the first logon.
+rem Rendered from ansible/templates/windows/SetupComplete.cmd.j2
+rem =====================================================================
+rem Deployment : {{ forge_deployment_id | default('manual') }}
+rem Commit     : {{ forge_git_commit | default('unknown') }}
+rem
+rem FAILURE MODE: if this script never runs, the host installs correctly
+rem but has no WinRM listener and Ansible cannot reach it. Recovery is
+rem documented in docs/TROUBLESHOOTING.md, "WinRM listener unavailable".
+
+setlocal enableextensions
+set FORGE_DIR=C:\ProgramData\forge-ai
+set FORGE_LOG=%FORGE_DIR%\setupcomplete.log
+set FORGE_MAC={{ host.mac_address | replace(':', '-') }}
+set FORGE_BOOT={{ forge_boot_base_url }}
+
+if not exist "%FORGE_DIR%" md "%FORGE_DIR%"
+echo [%DATE% %TIME%] FORGE-AI SetupComplete starting on %COMPUTERNAME% > "%FORGE_LOG%"
+
+rem -------------------------------------------------------------------
+rem 1. Record what produced this machine (consumed by the deployment
+rem    report and by the drift-detection compliance probes).
+rem -------------------------------------------------------------------
+> "%FORGE_DIR%\provisioning.json" (
+  echo {
+  echo   "deployment_id": "{{ forge_deployment_id | default('manual') }}",
+  echo   "git_commit": "{{ forge_git_commit | default('unknown') }}",
+  echo   "host": "{{ host.name }}",
+  echo   "profile": "{{ host.profile }}",
+  echo   "provisioned_by": "forge-ai-winpe"
+  echo }
+)
+
+rem -------------------------------------------------------------------
+rem 2. Secure remote management. This is the step that makes the host
+rem    manageable by Ansible, so it is retried and its failure is
+rem    reported to the state service.
+rem -------------------------------------------------------------------
+echo [%TIME%] Configuring WinRM over HTTPS >> "%FORGE_LOG%"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass ^
+  -File C:\Windows\Setup\Scripts\Configure-WinRM.ps1 >> "%FORGE_LOG%" 2>&1
+set WINRM_RC=%errorlevel%
+echo [%TIME%] Configure-WinRM.ps1 exit code %WINRM_RC% >> "%FORGE_LOG%"
+
+rem -------------------------------------------------------------------
+rem 3. QEMU guest agent, if the VirtIO share is still reachable.
+rem    Non-fatal: the baseline role installs it later if this misses.
+rem -------------------------------------------------------------------
+{% if baseline.windows.install_qemu_guest_agent | default(true) %}
+echo [%TIME%] Installing qemu-guest-agent >> "%FORGE_LOG%"
+net use V: "\\{{ provisioning_network.gateway }}\{{ virtio_media_share_name | default('virtio') }}" /persistent:no >> "%FORGE_LOG%" 2>&1
+if exist "V:\{{ media.windows.virtio.guest_agent_path | replace('/', '\\') }}" (
+  msiexec /i "V:\{{ media.windows.virtio.guest_agent_path | replace('/', '\\') }}" /qn /norestart >> "%FORGE_LOG%" 2>&1
+) else (
+  echo [%TIME%] guest agent MSI not found on the VirtIO share >> "%FORGE_LOG%"
+)
+net use V: /delete /y >> "%FORGE_LOG%" 2>&1
+{% endif %}
+
+rem -------------------------------------------------------------------
+rem 4. Report the final state so the iPXE state service stops offering
+rem    an installer for this MAC.
+rem -------------------------------------------------------------------
+if "%WINRM_RC%"=="0" (
+  set FORGE_STATE=configuring
+) else (
+  set FORGE_STATE=failed
+)
+echo [%TIME%] Reporting state=%FORGE_STATE% >> "%FORGE_LOG%"
+curl.exe --silent --show-error --max-time 30 --retry 5 --retry-delay 5 ^
+  -X POST -H "Content-Type: application/json" ^
+{% if forge_state_token | default('') | length > 0 %}
+  -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
+  -d "{\"state\":\"%FORGE_STATE%\",\"source\":\"setupcomplete\",\"host\":\"{{ host.name }}\"}" ^
+  "%FORGE_BOOT%/api/state/%FORGE_MAC%" >> "%FORGE_LOG%" 2>&1
+
+rem -------------------------------------------------------------------
+rem 5. Ship this log to the boot server so a failed run is diagnosable
+rem    without console access to the VM.
+rem -------------------------------------------------------------------
+curl.exe --silent --max-time 60 -X POST --data-binary "@%FORGE_LOG%" ^
+  -H "Content-Type: text/plain" ^
+  "%FORGE_BOOT%/api/log/{{ host.name }}/setupcomplete.log" >nul 2>&1
+
+echo [%DATE% %TIME%] FORGE-AI SetupComplete finished >> "%FORGE_LOG%"
+endlocal
+exit /b 0
