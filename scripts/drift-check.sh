@@ -118,12 +118,12 @@ main() {
         exit 0
     fi
 
-    require_commands ansible-playbook
+    require_commands "$FORGE_ANSIBLE_PLAYBOOK"
     log_step "Detecting drift"
     log_dim "this runs the baseline in check mode plus the read-only compliance probes"
     log_dim "nothing is changed"
 
-    local -a command=(ansible-playbook playbooks/detect-drift.yml)
+    local -a command=("$FORGE_ANSIBLE_PLAYBOOK" playbooks/detect-drift.yml)
     [[ -f "$FORGE_ROOT/.vault-password" ]] && command+=(--vault-password-file "$FORGE_ROOT/.vault-password")
     [[ -n "$LIMIT" ]] && command+=(--limit "$LIMIT")
 

@@ -96,6 +96,24 @@ forge_repo_root() {
 FORGE_ROOT="${FORGE_ROOT:-$(forge_repo_root)}"
 export FORGE_ROOT
 
+# Prefer the project virtualenv's ansible-playbook over one on PATH, the
+# same way the Makefile's ANSIBLE_PLAYBOOK does. prepare-host.sh creates
+# that virtualenv precisely so nothing has to touch the system Python,
+# but a script invoked directly -- not through `make` -- has no other
+# way to find it: bash does not inherit venv activation across scripts,
+# and expecting the operator to `source .venv/bin/activate` before every
+# ./bootstrap/*.sh or ./scripts/*.sh call is exactly the kind of manual
+# step this project tries to design out. Without this, bootstrap.sh,
+# destroy.sh, drift-check.sh and smoke-test.sh all failed identically on
+# a freshly bootstrapped host with an unactivated venv:
+# "ansible-playbook: command not found".
+if [[ -x "$FORGE_ROOT/.venv/bin/ansible-playbook" ]]; then
+    FORGE_ANSIBLE_PLAYBOOK="$FORGE_ROOT/.venv/bin/ansible-playbook"
+else
+    FORGE_ANSIBLE_PLAYBOOK="ansible-playbook"
+fi
+export FORGE_ANSIBLE_PLAYBOOK
+
 # ---------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------

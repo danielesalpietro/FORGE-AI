@@ -67,7 +67,7 @@ fi
 
 main() {
     forge_require_valid_config
-    require_commands ansible-playbook jq
+    require_commands "$FORGE_ANSIBLE_PLAYBOOK" jq
 
     local token report_dir iso_dir
     token=$(forge_config '.safety.destroy_confirmation_token')
@@ -108,7 +108,7 @@ main() {
 
     log_step "Destroying"
     local -a command=(
-        ansible-playbook playbooks/destroy-poc.yml
+        "$FORGE_ANSIBLE_PLAYBOOK" playbooks/destroy-poc.yml
         -e "confirm_destroy=$token"
         -e "destroy_media=$DESTROY_MEDIA"
         -e "destroy_control_plane=$DESTROY_CONTROL_PLANE"

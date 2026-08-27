@@ -84,7 +84,7 @@ should_run() {
 
 ansible_playbook() {
     local playbook=$1; shift
-    local -a command=(ansible-playbook "playbooks/$playbook")
+    local -a command=("$FORGE_ANSIBLE_PLAYBOOK" "playbooks/$playbook")
 
     if [[ -f "$FORGE_ROOT/.vault-password" ]]; then
         command+=(--vault-password-file "$FORGE_ROOT/.vault-password")

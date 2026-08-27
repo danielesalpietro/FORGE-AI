@@ -264,7 +264,7 @@ test_idempotence() {
 
     local output rc=0
     output=$( cd "$FORGE_ROOT/ansible" && \
-              ansible-playbook playbooks/configure-targets.yml --check --diff \
+              "$FORGE_ANSIBLE_PLAYBOOK" playbooks/configure-targets.yml --check --diff \
                 ${VAULT_ARGUMENT:+--vault-password-file "$FORGE_ROOT/.vault-password"} \
                 2>&1 ) || rc=$?
 
