@@ -55,7 +55,21 @@ jobs:
         run: |
           # --format github turns findings into inline annotations on the
           # pull request, so a reviewer sees them on the diff itself.
-          ./scripts/validate-config.py --strict --format github
+          #
+          # --config is explicit so this step validates what its name says.
+          # Without it the script prefers config/poc.yml, which is
+          # git-ignored here but would exist on a self-hosted runner and
+          # would silently change what is being checked.
+          #
+          # Deliberately NOT --strict. The example config warns that
+          # media.windows.iso_path is empty, and it always will: the brief
+          # forbids committing Windows media, so no file the repository can
+          # name exists. Under --strict that structural warning fails every
+          # run forever, which trains reviewers to ignore a red check.
+          # Errors still fail this step; warnings still annotate the diff.
+          ./scripts/validate-config.py \
+            --config config/poc.example.yml \
+            --format github
 
       - name: Confirm the JSON Schema is itself valid
         run: |
