@@ -162,7 +162,21 @@ correction command** rather than letting Setup discover it.
 | dnsmasq | 2.90 | Ubuntu 24.04 |
 | wimlib (`wimtools`) | 1.14.4 | Ubuntu 24.04 |
 | p7zip | 16.02 | Ubuntu 24.04 |
-| Samba | 4.19 | Alpine 3.20 |
+| Samba (`samba-server`, `samba-client`, `samba-common-tools`) | whatever `alpine:3.20.3` resolves | Alpine 3.20 `community` |
+
+The Samba packages carry no `apk` version constraint. Pinning the base
+image to a patch tag already fixes the package index those names resolve
+against, so the result is deterministic; a fuzzy `=~4.x` constraint on top
+would add no reproducibility and would break the build the moment the 3.20
+branch moved to the next Samba minor. To record what an actual build
+resolved to:
+
+```bash
+docker run --rm --entrypoint apk forge-winmedia list --installed | grep samba
+```
+
+The same reasoning applies to `curl` in the state-service and webhook
+images.
 
 ---
 
@@ -177,7 +191,7 @@ correction command** rather than letting Setup discover it.
 | `pytest` | 8.2+ | 204 unit tests |
 | `bats` | 1.10+ | 29 shell tests |
 | Molecule | 24.2+ | `make test-molecule` |
-| Trivy | via `trivy-action@0.28.0` | CI |
+| Trivy | via `aquasecurity/trivy-action@v0.36.0` | CI |
 | Gitleaks | via `gitleaks-action@v2` | CI |
 
 ---

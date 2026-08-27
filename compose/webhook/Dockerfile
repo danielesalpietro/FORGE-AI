@@ -8,9 +8,13 @@ LABEL org.opencontainers.image.title="forge-webhook" \
       org.opencontainers.image.source="https://github.com/danielesalpietro/FORGE-AI" \
       org.opencontainers.image.licenses="Apache-2.0"
 
+# curl is left unpinned deliberately: the base image tag
+# (python:3.12.7-alpine3.20) already fixes the package index this
+# resolves against, so the version is deterministic without a fuzzy
+# constraint that would break on the next Alpine minor bump.
 RUN addgroup -g 10002 -S forge \
  && adduser  -u 10002 -S -G forge -h /nonexistent -s /sbin/nologin forge \
- && apk add --no-cache curl=~8
+ && apk add --no-cache curl
 
 WORKDIR /app
 COPY --chown=root:root app.py /app/app.py

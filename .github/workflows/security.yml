@@ -198,7 +198,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Scan the filesystem for vulnerabilities and secrets
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -207,15 +207,23 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
 
+      # Uploading SARIF needs Code scanning enabled on the repository,
+      # which is a repository SETTING and not something a workflow can
+      # turn on. It is not available on a private repository without
+      # GitHub Advanced Security. The scan itself still runs and the
+      # critical-finding gate below still blocks -- only the pretty
+      # rendering in the Security tab is optional, so this step must not
+      # fail the build.
       - name: Upload the filesystem findings
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-filesystem.sarif
           category: trivy-filesystem
 
       - name: Scan the infrastructure-as-code configuration
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
@@ -225,13 +233,16 @@ jobs:
 
       - name: Upload the configuration findings
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-config.sarif
           category: trivy-config
 
+      # This is the gate that actually blocks. It needs no repository
+      # setting, so it works on any fork or private clone.
       - name: Fail on a critical finding
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -255,7 +266,7 @@ jobs:
           docker build -t "forge-ai/${{ matrix.service }}:ci" "compose/${{ matrix.service }}"
 
       - name: Scan it
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: forge-ai/${{ matrix.service }}:ci
           format: table
@@ -287,11 +298,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Dependency review needs the repository's Dependency graph to be
+      # enabled -- a SETTING, under Security & analysis, not something a
+      # workflow can turn on. It is unavailable on a private repository
+      # without GitHub Advanced Security.
+      #
+      # It is therefore advisory here rather than blocking. A required
+      # check that can never pass until someone flips a setting they were
+      # never told about is worse than no check: it trains reviewers to
+      # ignore red.
+      #
+      # The next step reports clearly which of the two happened.
       - name: Review the dependency changes
+        id: review
+        continue-on-error: true
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
+
+      - name: Report the outcome
+        run: |
+          case "${{ steps.review.outcome }}" in
+            success)
+              echo "Dependency review passed."
+              ;;
+            failure)
+              {
+                echo "### Dependency review"
+                echo
+                echo "This step did not pass. Either it found a high-severity"
+                echo "advisory -- open the step log and act on it -- or the"
+                echo "repository does not have **Dependency graph** enabled."
+                echo
+                echo "Enable it under **Settings → Security & analysis**."
+                echo "It is unavailable on a private repository without"
+                echo "GitHub Advanced Security; see \`docs/LIMITATIONS.md\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::dependency review did not pass -- see the run summary"
+              ;;
+          esac
 
   summary:
     name: Security summary

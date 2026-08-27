@@ -40,6 +40,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          # setup-python globs **/requirements.txt and **/pyproject.toml
+          # by default, and this project has neither -- its pinned file
+          # is named requirements-python.txt. Without this the action
+          # errors out before a single step of the job has run.
+          cache-dependency-path: ansible/requirements-python.txt
 
       - name: Install the validation dependencies
         run: |
@@ -97,6 +102,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          # setup-python globs **/requirements.txt and **/pyproject.toml
+          # by default, and this project has neither -- its pinned file
+          # is named requirements-python.txt. Without this the action
+          # errors out before a single step of the job has run.
+          cache-dependency-path: ansible/requirements-python.txt
 
       - name: Install the rendering dependencies
         run: |
@@ -192,6 +202,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          # setup-python globs **/requirements.txt and **/pyproject.toml
+          # by default, and this project has neither -- its pinned file
+          # is named requirements-python.txt. Without this the action
+          # errors out before a single step of the job has run.
+          cache-dependency-path: ansible/requirements-python.txt
 
       - name: Install Ansible
         run: |
@@ -262,6 +277,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          # setup-python globs **/requirements.txt and **/pyproject.toml
+          # by default, and this project has neither -- its pinned file
+          # is named requirements-python.txt. Without this the action
+          # errors out before a single step of the job has run.
+          cache-dependency-path: ansible/requirements-python.txt
 
       - name: Install the test dependencies
         run: |

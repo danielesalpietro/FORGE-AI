@@ -15,7 +15,18 @@ LABEL org.opencontainers.image.title="forge-winmedia" \
       org.opencontainers.image.description="Read-only SMB export of operator-supplied Windows installation media" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-RUN apk add --no-cache samba-server=~4.19 samba-common-tools=~4.19 \
+# No `=~<version>` constraints here on purpose. The base image is pinned
+# to a patch tag (alpine:3.20.3), and that tag fixes the package index it
+# resolves against, so the installed versions are already deterministic.
+# A fuzzy constraint layered on top adds no reproducibility -- it only
+# adds a way for the build to break when the 3.20 branch moves Samba to
+# the next minor. Record the resolved versions with
+# `docker run --rm forge-winmedia apk list --installed`; docs/COMPATIBILITY.md
+# carries the tested set.
+#
+# samba-client supplies smbclient, which the HEALTHCHECK below invokes;
+# samba-server alone does not pull it in.
+RUN apk add --no-cache samba-server samba-client samba-common-tools \
  && mkdir -p /var/lib/samba /var/log/samba /run/samba
 
 COPY smb.conf /etc/samba/smb.conf

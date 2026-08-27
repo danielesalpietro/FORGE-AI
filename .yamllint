@@ -9,6 +9,10 @@ ignore: |
   .venv/
   node_modules/
   compose/.env
+  # An operator-created Ansible Vault file is ciphertext, not YAML: it
+  # has no `---` and no structure to lint. It is git-ignored, so CI never
+  # sees one, but `make lint-yaml` on a real host would fail without this.
+  ansible/inventories/**/vault.yml
 
 rules:
   # Ansible task names and long Jinja expressions routinely exceed 80
