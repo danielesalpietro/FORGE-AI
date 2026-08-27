@@ -73,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     use_colour = sys.stderr.isatty() and args.format == "text"
 
     try:
-        config = forge_config.load_config(args.defaults, args.config)
+        # An empty --config is the same as none: `make` exports
+        # FORGE_CONFIG unconditionally, so it can arrive empty.
+        config = forge_config.load_config(args.defaults, args.config or None)
     except (FileNotFoundError, ValueError) as exc:
         print(f"configuration could not be loaded: {exc}", file=sys.stderr)
         return 2

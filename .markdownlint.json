@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "FORGE-AI markdownlint configuration.",
+    "Rules are enabled by default; only deliberate exceptions appear here."
+  ],
+  "default": true,
+
+  "MD013": {
+    "_comment": "Line length: prose is wrapped at 80, but tables and code blocks are not.",
+    "line_length": 100,
+    "tables": false,
+    "code_blocks": false,
+    "headings": false
+  },
+
+  "MD024": {
+    "_comment": "Repeated headings are fine when nested under different parents -- the troubleshooting guide has a 'Cause' under every symptom.",
+    "siblings_only": true
+  },
+
+  "MD033": {
+    "_comment": "Inline HTML is used for <details> blocks in the reports and docs.",
+    "allowed_elements": ["details", "summary", "br", "img", "a", "kbd"]
+  },
+
+  "MD041": {
+    "_comment": "The first line of a file need not be a heading: several start with a comment banner.",
+    "level": 1,
+    "front_matter_title": ""
+  },
+
+  "MD046": {
+    "_comment": "Fenced code blocks only; indented blocks are ambiguous next to lists.",
+    "style": "fenced"
+  },
+
+  "MD029": {
+    "_comment": "Ordered lists number sequentially, so a runbook step can be referenced by number.",
+    "style": "ordered"
+  }
+}

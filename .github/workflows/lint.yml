@@ -1,0 +1,191 @@
+---
+# =====================================================================
+# FORGE-AI :: lint
+# =====================================================================
+# Style and static analysis. Fast, and runs on every push and pull
+# request. Nothing here needs a hypervisor, a network boot or any
+# secret.
+# =====================================================================
+name: lint
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+
+  yamllint:
+    name: YAML
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install yamllint
+        run: pip install --disable-pip-version-check "yamllint>=1.35,<2"
+
+      - name: Lint every YAML document
+        run: |
+          yamllint --strict -c .yamllint \
+            config/ ansible/ compose/ tests/ .github/ Taskfile.yml
+
+  ansible-lint:
+    name: Ansible
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Ansible and ansible-lint
+        run: |
+          # The `ansible` distribution bundles the collections this
+          # project needs, so the lint job does not depend on Galaxy
+          # being reachable.
+          pip install --disable-pip-version-check \
+            "ansible>=10,<13" "ansible-lint>=24.7,<26"
+
+      - name: Run ansible-lint at the production profile
+        working-directory: ansible
+        run: ansible-lint --offline --format=pep8
+
+  shellcheck:
+    name: Shell
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+
+      - name: Check every script
+        run: |
+          shellcheck --version
+          shellcheck -x -P bootstrap:.:scripts \
+            bootstrap/*.sh \
+            bootstrap/lib/*.sh \
+            scripts/*.sh \
+            compose/database/init/*.sh
+
+      - name: Confirm every script sets the strict flags
+        run: |
+          # A script without `set -Eeuo pipefail` fails silently on the
+          # first error and carries on doing damage.
+          missing=0
+          for script in bootstrap/*.sh scripts/*.sh; do
+            grep -q '^set -Eeuo pipefail' "$script" || {
+              echo "::error file=$script::missing 'set -Eeuo pipefail'"
+              missing=1
+            }
+            grep -q 'forge_enable_traps' "$script" || {
+              echo "::error file=$script::does not install the error trap"
+              missing=1
+            }
+          done
+          exit $missing
+
+  markdown:
+    name: Markdown
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install markdownlint
+        run: npm install -g markdownlint-cli@0.42.0
+
+      - name: Lint the documentation
+        run: markdownlint --config .markdownlint.json '**/*.md' --ignore node_modules
+
+      - name: Check for broken relative links
+        run: |
+          # A documentation link that points at a file which does not
+          # exist is worse than no link: it sends the reader looking.
+          broken=0
+          while IFS= read -r -d '' document; do
+            directory=$(dirname "$document")
+            # Extract markdown links that are relative paths.
+            grep -oE '\]\(([^)#][^)]*)\)' "$document" 2>/dev/null \
+              | sed -E 's/^\]\(//; s/\)$//' \
+              | grep -vE '^(https?|mailto):' \
+              | sed -E 's/#.*$//' \
+              | while read -r target; do
+                  [ -z "$target" ] && continue
+                  if [ ! -e "$directory/$target" ] && [ ! -e "$target" ]; then
+                    echo "::error file=$document::broken link to '$target'"
+                    exit 1
+                  fi
+                done || broken=1
+          done < <(find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*' -print0)
+          exit $broken
+
+  compose:
+    name: Docker Compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the compose file
+        run: |
+          # The compose file uses ${VAR:?message} so a missing secret
+          # fails fast at runtime. Validation therefore needs a
+          # populated .env -- with obvious throwaway values.
+          cp compose/.env.example compose/.env
+          sed -i 's/=CHANGEME/=ci-placeholder-value-not-a-secret/' compose/.env
+          docker compose --env-file compose/.env -f compose/docker-compose.yml config --quiet
+          echo "compose file is valid"
+
+      - name: Confirm every required secret is enforced
+        run: |
+          # Each of these must use the ${VAR:?...} form. Without it the
+          # stack would start with an empty password.
+          required="POSTGRES_SUPERUSER_PASSWORD GITEA_DB_PASSWORD SEMAPHORE_DB_PASSWORD
+                    GITEA_SECRET_KEY GITEA_INTERNAL_TOKEN SEMAPHORE_ADMIN_PASSWORD
+                    SEMAPHORE_ACCESS_KEY_ENCRYPTION FORGE_WEBHOOK_SECRET"
+          missing=0
+          for variable in $required; do
+            grep -q "\${${variable}:?" compose/docker-compose.yml || {
+              echo "::error file=compose/docker-compose.yml::${variable} is not enforced with \${VAR:?message}"
+              missing=1
+            }
+          done
+          exit $missing
+
+      - name: Confirm no container runs privileged
+        run: |
+          if grep -E '^\s*privileged:\s*true' compose/docker-compose.yml; then
+            echo "::error file=compose/docker-compose.yml::a container requests privileged mode"
+            exit 1
+          fi
+          echo "no privileged containers"
+
+      - name: Confirm every image tag is pinned
+        run: |
+          # `latest` makes a deployment unreproducible and silently
+          # changes what runs.
+          if grep -E '^\s*image:.*:latest' compose/docker-compose.yml; then
+            echo "::error file=compose/docker-compose.yml::an image uses the :latest tag"
+            exit 1
+          fi
+          echo "all image tags are pinned"

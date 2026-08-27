@@ -1,0 +1,198 @@
+---
+# =====================================================================
+# FORGE-AI :: end-to-end on a self-hosted KVM runner
+# =====================================================================
+# DISABLED BY DEFAULT. This is the only workflow that actually creates
+# virtual machines and installs operating systems, and it cannot run on
+# a GitHub-hosted runner: those have no nested virtualisation, so KVM
+# is unavailable and QEMU would fall back to full emulation -- a
+# Windows Server installation that takes 20 minutes on KVM takes many
+# hours emulated.
+#
+# TO ENABLE IT
+#
+#   1. Provide a self-hosted runner labelled `kvm`:
+#        - Ubuntu 24.04 x86_64, bare metal or a VM with nested
+#          virtualisation enabled
+#        - /dev/kvm present and writable by the runner user
+#        - >= 32 GB RAM and >= 250 GB free disk
+#        - the runner user in the libvirt, kvm and docker groups
+#
+#   2. Place the operator-supplied Windows Server ISO on the runner and
+#      set the repository variable FORGE_WINDOWS_ISO to its path. No
+#      Microsoft media passes through GitHub.
+#
+#   3. Change the `if:` below to `true`, or dispatch it manually.
+#
+# WHY IT IS OFF RATHER THAN DELETED
+#
+#   A repository that claims end-to-end coverage it does not have is
+#   worse than one that is explicit about the gap. This file is the
+#   procedure, kept in version control and kept current, so the claim in
+#   docs/LIMITATIONS.md is checkable.
+# =====================================================================
+name: e2e-selfhosted
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy_after:
+        description: "Destroy the PoC when the run finishes"
+        type: boolean
+        default: true
+      windows:
+        description: "Include the Windows target (needs operator-supplied media on the runner)"
+        type: boolean
+        default: false
+  schedule:
+    # Weekly, so the full path is exercised regularly rather than only
+    # before a demonstration.
+    - cron: "0 2 * * 6"
+
+permissions:
+  contents: read
+
+concurrency:
+  # A single KVM runner cannot host two deployments of the same PoC.
+  group: e2e-kvm
+  cancel-in-progress: false
+
+jobs:
+
+  end-to-end:
+    name: Full lifecycle on KVM
+    # Set to `true` once a self-hosted runner labelled `kvm` exists.
+    if: false
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm the runner really can virtualise
+        run: |
+          # Failing here is much cheaper than discovering it 40 minutes
+          # into an emulated Windows installation.
+          test -w /dev/kvm || { echo "::error::/dev/kvm is missing or not writable"; exit 1; }
+          grep -qE '(vmx|svm)' /proc/cpuinfo || { echo "::error::no hardware virtualisation"; exit 1; }
+          echo "KVM available: $(grep -cE '(vmx|svm)' /proc/cpuinfo) threads"
+
+      - name: Prepare the configuration
+        env:
+          WINDOWS_ISO: ${{ vars.FORGE_WINDOWS_ISO }}
+        run: |
+          cp config/poc.example.yml config/poc.yml
+          if [ "${{ inputs.windows }}" = "true" ] && [ -n "$WINDOWS_ISO" ]; then
+            # The path is a repository variable, not a secret: it names
+            # a file on the runner, it is not the media itself.
+            python3 - <<PYTHON
+          import pathlib, re
+          path = pathlib.Path("config/poc.yml")
+          text = path.read_text()
+          text = re.sub(r'(\n\s+iso_path: )""', r'\1"${WINDOWS_ISO}"', text, count=1)
+          path.write_text(text)
+          PYTHON
+            echo "Windows target enabled with $WINDOWS_ISO"
+          else
+            # Remove the Windows host entirely rather than letting the
+            # run fail halfway through for want of media.
+            python3 - <<'PYTHON'
+          import pathlib, yaml
+          path = pathlib.Path("config/poc.yml")
+          config = yaml.safe_load(path.read_text())
+          config["hosts"] = [h for h in config["hosts"] if h["os_family"] != "windows"]
+          path.write_text(yaml.safe_dump(config, sort_keys=False))
+          PYTHON
+            echo "Ubuntu-only run"
+          fi
+
+      - name: Check the prerequisites
+        run: ./bootstrap/check-prerequisites.sh --verbose
+
+      - name: Generate the secrets
+        run: ./bootstrap/create-secrets.sh
+
+      - name: Bootstrap the control plane
+        run: ./bootstrap/bootstrap.sh
+
+      - name: Prepare the installation media
+        run: make prepare-media
+
+      - name: Provision the targets
+        run: make deploy
+
+      - name: Validate the deployment
+        run: make validate-deployment
+
+      - name: Smoke test
+        run: ./scripts/smoke-test.sh --junit smoke-results.xml
+
+      - name: Prove the configuration is idempotent
+        run: |
+          # The requirement is explicit: run the configuration twice and
+          # report whether the second run changed anything.
+          cd ansible
+          ansible-playbook playbooks/configure-targets.yml \
+            --vault-password-file ../.vault-password 2>&1 | tee /tmp/second-run.log
+
+          changed=$(grep -oE 'changed=[0-9]+' /tmp/second-run.log \
+                    | cut -d= -f2 | paste -sd+ | bc)
+          echo "second run changed $changed task(s)"
+          if [ "${changed:-0}" -ne 0 ]; then
+            echo "::warning::the configuration is not fully idempotent: $changed task(s) changed on the second run"
+            grep -B2 'changed:' /tmp/second-run.log | head -40
+          fi
+
+      - name: Demonstrate drift detection and reconciliation
+        run: |
+          # Introduce drift by hand, exactly as docs/DEMO-RUNBOOK.md does.
+          address=$(./scripts/validate-config.py --json --quiet \
+                    | jq -r '.hosts[] | select(.os_family=="linux") | .ip_address')
+          user=$(./scripts/validate-config.py --json --quiet | jq -r '.users.automation_user')
+
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/forge-ai-poc "${user}@${address}" \
+            'echo "DRIFTED BY THE E2E TEST" | sudo tee /etc/issue.net'
+
+          echo "--- detection must now find it ---"
+          ./scripts/drift-check.sh --fail-on-drift && {
+            echo "::error::drift was introduced but not detected"
+            exit 1
+          } || echo "drift detected, as expected"
+
+          echo "--- reconciliation must fix it ---"
+          make reconcile
+
+          echo "--- and detection must now be clean ---"
+          ./scripts/drift-check.sh --fail-on-drift
+
+      - name: Collect the reports
+        if: always()
+        run: |
+          mkdir -p artefacts
+          cp -a /srv/forge-ai/reports/. artefacts/ 2>/dev/null || true
+          cp smoke-results.xml artefacts/ 2>/dev/null || true
+          # Logs, for a failed run.
+          sudo cp -a /srv/forge-ai/logs artefacts/logs 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" artefacts || true
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reports
+          path: artefacts/
+          retention-days: 14
+
+      - name: Publish the deployment report to the run summary
+        if: always()
+        run: |
+          if [ -r /srv/forge-ai/reports/latest.md ]; then
+            cat /srv/forge-ai/reports/latest.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No deployment report was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Destroy the PoC
+        if: always() && inputs.destroy_after
+        run: |
+          ./scripts/destroy.sh --media --yes || true

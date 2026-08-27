@@ -1,0 +1,229 @@
+---
+# =====================================================================
+# FORGE-AI :: Taskfile (https://taskfile.dev)
+# =====================================================================
+#   task --list
+#   task check
+#   task deploy
+#
+# The Makefile is the primary interface and is what the documentation
+# references; every target here delegates to it, so the two cannot drift
+# apart. This file exists because Task gives three things make does not:
+#
+#   * `deps` runs prerequisites concurrently, so `task validate` runs
+#     four independent checks in parallel rather than in sequence;
+#   * `sources`/`generates` skip work whose inputs have not changed;
+#   * `prompt` asks before a destructive task, in the tool itself.
+#
+# If you do not use Task, ignore this file entirely. Nothing depends
+# on it.
+# =====================================================================
+
+version: '3'
+
+vars:
+  MAKE: make
+
+env:
+  FORGE_CONFIG: '{{.FORGE_CONFIG | default ""}}'
+
+tasks:
+
+  default:
+    desc: Show the available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  # -------------------------------------------------------------------
+  # Validation
+  # -------------------------------------------------------------------
+
+  check:
+    desc: Check this host can run the PoC (read-only)
+    cmds:
+      - ./bootstrap/check-prerequisites.sh
+
+  validate:
+    desc: Everything CI runs, with the independent checks in parallel
+    deps: [validate:config, validate:templates, validate:syntax, test:unit]
+    cmds:
+      - echo "All validation passed"
+
+  validate:config:
+    desc: Validate the configuration against the schema and semantic rules
+    sources:
+      - config/**/*.yml
+      - config/schema/*.json
+      - scripts/lib/forge_config.py
+    cmds:
+      - ./scripts/validate-config.py
+
+  validate:templates:
+    desc: Render every Jinja2 template and parse the result
+    sources:
+      - ansible/templates/**/*.j2
+      - config/**/*.yml
+      - tests/fixtures/render_context.py
+    cmds:
+      - ./scripts/render-templates.py --check --quiet
+
+  validate:syntax:
+    desc: Ansible syntax check on every playbook
+    sources:
+      - ansible/playbooks/*.yml
+      - ansible/roles/**/*.yml
+      - ansible/inventories/**/*
+    dir: ansible
+    cmds:
+      - for: { var: PLAYBOOKS }
+        cmd: ansible-playbook --syntax-check {{.ITEM}}
+    vars:
+      PLAYBOOKS:
+        sh: ls playbooks/*.yml
+
+  lint:
+    desc: Run every linter, in parallel
+    deps: [lint:yaml, lint:ansible, lint:shell]
+
+  lint:yaml:
+    desc: yamllint
+    cmds:
+      - yamllint -c .yamllint config/ ansible/ compose/ tests/ .github/
+
+  lint:ansible:
+    desc: ansible-lint (production profile)
+    dir: ansible
+    cmds:
+      - ansible-lint --offline
+
+  lint:shell:
+    desc: ShellCheck every script
+    cmds:
+      - shellcheck -x -P bootstrap:.:scripts bootstrap/*.sh bootstrap/lib/*.sh scripts/*.sh
+
+  # -------------------------------------------------------------------
+  # Tests
+  # -------------------------------------------------------------------
+
+  test:
+    desc: Unit and shell tests
+    deps: [test:unit, test:shell]
+
+  test:unit:
+    desc: pytest unit tests
+    sources:
+      - tests/**/*.py
+      - scripts/lib/*.py
+      - ansible/filter_plugins/*.py
+      - ansible/templates/**/*.j2
+      - config/**/*.yml
+    cmds:
+      - python3 -m pytest tests/unit -q
+
+  test:shell:
+    desc: bats shell tests
+    sources:
+      - tests/bats/*.bats
+      - bootstrap/**/*.sh
+      - scripts/*.sh
+    cmds:
+      - bats tests/bats/
+
+  test:integration:
+    desc: Integration tests against a live control plane
+    cmds:
+      - python3 -m pytest tests/integration -m integration -v
+
+  # -------------------------------------------------------------------
+  # Lifecycle -- delegated to the Makefile so the two cannot diverge
+  # -------------------------------------------------------------------
+
+  bootstrap:
+    desc: Secrets, provisioning network, control plane, Gitea and Semaphore
+    cmds:
+      - '{{.MAKE}} bootstrap'
+
+  secrets:
+    desc: Generate every secret (idempotent)
+    cmds:
+      - '{{.MAKE}} secrets'
+
+  prepare-media:
+    desc: Download, verify and unpack the installation media
+    cmds:
+      - '{{.MAKE}} prepare-media'
+
+  provision:
+    desc: Create the VMs and install both operating systems
+    cmds:
+      - '{{.MAKE}} provision'
+
+  deploy:
+    desc: The whole lifecycle
+    cmds:
+      - '{{.MAKE}} deploy'
+
+  configure:
+    desc: Apply the baseline configuration to every target
+    cmds:
+      - '{{.MAKE}} configure'
+
+  validate-deployment:
+    desc: Smoke tests, idempotence check and the deployment report
+    cmds:
+      - '{{.MAKE}} validate-deployment'
+
+  # -------------------------------------------------------------------
+  # Operations
+  # -------------------------------------------------------------------
+
+  state:
+    desc: Show each host's provisioning lifecycle state
+    cmds:
+      - ./scripts/set-boot-state.sh
+
+  drift:
+    desc: Detect drift. Changes nothing.
+    cmds:
+      - ./scripts/drift-check.sh
+
+  reconcile:
+    desc: Reapply the desired state, then prove it took
+    prompt: Reconciliation reverts anything changed by hand on the targets. Continue?
+    cmds:
+      - '{{.MAKE}} reconcile'
+
+  smoke-test:
+    desc: Verify both targets by reading them
+    cmds:
+      - ./scripts/smoke-test.sh
+
+  logs:
+    desc: Follow the control-plane logs
+    cmds:
+      - '{{.MAKE}} logs SERVICE={{.SERVICE}}'
+
+  # -------------------------------------------------------------------
+  # Teardown
+  # -------------------------------------------------------------------
+
+  destroy:
+    desc: Remove the VMs, PXE services and network
+    prompt: This removes the target VMs and their disks, and cannot be undone. Continue?
+    cmds:
+      # The Makefile requires CONFIRM as well: Task's prompt is a
+      # convenience, not the control. destroy-poc.yml checks the token a
+      # third time, on the Ansible side.
+      - '{{.MAKE}} destroy CONFIRM=DESTROY-POC'
+
+  destroy:all:
+    desc: Also remove the media and the control plane
+    prompt: This additionally removes the prepared media and the Docker control plane. Continue?
+    cmds:
+      - '{{.MAKE}} destroy-all CONFIRM=DESTROY-POC'
+
+  clean:
+    desc: Remove local build artefacts (touches no deployed state)
+    cmds:
+      - '{{.MAKE}} clean'

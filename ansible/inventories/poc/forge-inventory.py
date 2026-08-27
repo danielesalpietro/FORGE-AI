@@ -184,7 +184,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args(argv)
 
-    overlay = os.environ.get("FORGE_CONFIG")  # lets CI point at a fixture
+    # `or None` matters: `make` exports FORGE_CONFIG even when it is
+    # unset, so the variable arrives as an empty string. Treating that
+    # as a real path silently loads defaults-only, which has no hosts,
+    # and the inventory then refuses to build for a reason that has
+    # nothing to do with the operator's configuration.
+    overlay = os.environ.get("FORGE_CONFIG") or None  # lets CI point at a fixture
     try:
         config = forge_config.load_config(overlay_path=overlay)
     except (FileNotFoundError, ValueError) as exc:

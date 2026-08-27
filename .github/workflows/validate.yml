@@ -1,0 +1,313 @@
+---
+# =====================================================================
+# FORGE-AI :: validate
+# =====================================================================
+# Proves the desired state is deployable, without deploying it.
+# Everything here runs on a standard GitHub-hosted runner: no nested
+# virtualisation, no KVM, no secrets, no network boot.
+#
+# What this cannot prove is in docs/LIMITATIONS.md. Running the real
+# thing needs a self-hosted KVM runner; the workflow for that is at the
+# bottom of this file, disabled by default.
+# =====================================================================
+name: validate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+
+  configuration:
+    name: Configuration schema and semantics
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install the validation dependencies
+        run: |
+          pip install --disable-pip-version-check \
+            "jsonschema>=4.21,<5" "PyYAML>=6.0,<7" "Jinja2>=3.1.4,<4"
+
+      - name: Validate the shipped example configuration
+        run: |
+          # --format github turns findings into inline annotations on the
+          # pull request, so a reviewer sees them on the diff itself.
+          ./scripts/validate-config.py --strict --format github
+
+      - name: Confirm the JSON Schema is itself valid
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import jsonschema
+
+          with open("config/schema/poc.schema.json", encoding="utf-8") as handle:
+              schema = json.load(handle)
+
+          validator = jsonschema.validators.validator_for(schema)
+          validator.check_schema(schema)
+          print(f"schema is valid against {validator.META_SCHEMA['$id']}")
+          PYTHON
+
+      - name: Reject a configuration with duplicate addresses
+        run: |
+          # A negative test in CI: if the duplicate detection ever stops
+          # working, this job fails rather than silently passing
+          # everything through.
+          python3 - <<'PYTHON'
+          import copy
+          import sys
+
+          sys.path.insert(0, "scripts/lib")
+          import forge_config
+
+          config = forge_config.load_config()
+          for field, message in (("ip_address", "duplicate IP"), ("mac_address", "duplicate MAC")):
+              broken = copy.deepcopy(config)
+              broken["hosts"][1][field] = broken["hosts"][0][field]
+              result = forge_config.validate_semantics(broken)
+              assert not result.ok, f"{message} was NOT detected -- the check is broken"
+              print(f"ok: {message} detected")
+          PYTHON
+
+  templates:
+    name: Template rendering
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install the rendering dependencies
+        run: |
+          pip install --disable-pip-version-check \
+            "jsonschema>=4.21,<5" "PyYAML>=6.0,<7" "Jinja2>=3.1.4,<4"
+
+      - name: Render every template with fixture data
+        run: ./scripts/render-templates.py --check --out rendered
+
+      - name: Validate the rendered Autounattend.xml
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y libxml2-utils
+          for answer_file in rendered/*Autounattend.xml; do
+            [ -e "$answer_file" ] || continue
+            xmllint --noout "$answer_file"
+            echo "ok: $answer_file is well-formed"
+
+            # Every pass Windows Setup needs. A missing one turns an
+            # unattended installation into an interactive one, which on
+            # a headless VM looks like a hang.
+            for configuration_pass in windowsPE specialize oobeSystem; do
+              xmllint --xpath \
+                "/*[local-name()='unattend']/*[local-name()='settings'][@pass='${configuration_pass}']" \
+                "$answer_file" >/dev/null \
+                || { echo "::error::${answer_file} is missing the '${configuration_pass}' pass"; exit 1; }
+            done
+            echo "ok: $answer_file has every required pass"
+          done
+
+      - name: Validate the rendered libvirt XML
+        run: |
+          for xml in rendered/*.xml; do
+            case "$xml" in *Autounattend*) continue ;; esac
+            xmllint --noout "$xml"
+            echo "ok: $xml is well-formed"
+          done
+
+      - name: Validate the rendered Ubuntu autoinstall YAML
+        run: |
+          python3 - <<'PYTHON'
+          import pathlib
+          import sys
+          import yaml
+
+          failures = 0
+          for seed in pathlib.Path("rendered").glob("*user-data"):
+              parsed = yaml.safe_load(seed.read_text())
+              if "autoinstall" not in (parsed or {}):
+                  print(f"::error::{seed} has no top-level 'autoinstall' key")
+                  failures += 1
+                  continue
+
+              autoinstall = parsed["autoinstall"]
+              for key in ("version", "identity", "ssh", "storage", "late-commands"):
+                  if key not in autoinstall:
+                      print(f"::error::{seed} is missing autoinstall.{key}")
+                      failures += 1
+
+              if autoinstall.get("interactive-sections") != []:
+                  print(f"::error::{seed} is not fully unattended")
+                  failures += 1
+
+              print(f"ok: {seed}")
+
+          sys.exit(1 if failures else 0)
+          PYTHON
+
+      - name: Confirm no fixture secret leaked into a rendered artefact
+        run: |
+          # The fixtures use obvious placeholders precisely so this check
+          # is meaningful.
+          if grep -rl "FIXTURE-NOT-A-REAL-PASSWORD" rendered/ 2>/dev/null; then
+            echo "::error::a cleartext fixture password reached a rendered artefact"
+            exit 1
+          fi
+          echo "no cleartext password in any rendered artefact"
+
+      - name: Upload the rendered artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-templates
+          path: rendered/
+          retention-days: 7
+
+  ansible:
+    name: Ansible syntax and inventory
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Ansible
+        run: |
+          pip install --disable-pip-version-check \
+            "ansible>=10,<13" "jsonschema>=4.21,<5"
+
+      - name: Syntax-check every playbook
+        working-directory: ansible
+        run: |
+          failures=0
+          for playbook in playbooks/*.yml; do
+            if ansible-playbook --syntax-check "$playbook" >/dev/null 2>&1; then
+              echo "ok: $playbook"
+            else
+              echo "::error file=ansible/$playbook::syntax check failed"
+              ansible-playbook --syntax-check "$playbook" || true
+              failures=1
+            fi
+          done
+          exit $failures
+
+      - name: Build the inventory from the configuration
+        working-directory: ansible
+        run: |
+          ansible-inventory --list > /tmp/inventory.json
+          python3 - <<'PYTHON'
+          import json
+
+          with open("/tmp/inventory.json", encoding="utf-8") as handle:
+              inventory = json.load(handle)
+
+          targets = inventory["forge_targets"]["hosts"]
+          assert targets, "the inventory produced no targets"
+          print(f"targets: {', '.join(targets)}")
+
+          # Every target must have a connection defined, or the playbook
+          # would try the local connection and configure the runner.
+          for host in targets:
+              variables = inventory["_meta"]["hostvars"][host]
+              assert "ansible_connection" in variables, f"{host} has no ansible_connection"
+              assert "ansible_host" in variables, f"{host} has no ansible_host"
+              print(f"  {host}: {variables['ansible_connection']} -> {variables['ansible_host']}")
+          PYTHON
+
+      - name: Confirm every module reference is fully qualified
+        run: |
+          # A short module name resolves differently depending on which
+          # collections happen to be installed.
+          modules="apt|copy|file|template|service|systemd|command|shell"
+          modules="${modules}|uri|stat|user|lineinfile|get_url|assert|debug"
+          modules="${modules}|set_fact|fail|include_tasks|include_role|wait_for|find"
+          offenders=$(grep -rEn "^[[:space:]]{2,}(${modules}):[[:space:]]*$" \
+            ansible/roles ansible/playbooks || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::unqualified module names found:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "every module reference is fully qualified"
+
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install the test dependencies
+        run: |
+          pip install --disable-pip-version-check \
+            "pytest>=8.2,<9" "jsonschema>=4.21,<5" "PyYAML>=6.0,<7" "Jinja2>=3.1.4,<4"
+
+      - name: Run the unit tests
+        run: python3 -m pytest tests/unit -v --tb=short
+
+      - name: Install bats
+        run: sudo apt-get update -qq && sudo apt-get install -y bats
+
+      - name: Run the shell tests
+        run: bats tests/bats/
+
+  summary:
+    name: Validation summary
+    runs-on: ubuntu-24.04
+    needs: [configuration, templates, ansible, tests]
+    if: always()
+    steps:
+      - name: Report the outcome
+        run: |
+          {
+            echo "## Validation summary"
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Configuration | ${{ needs.configuration.result }} |"
+            echo "| Templates | ${{ needs.templates.result }} |"
+            echo "| Ansible | ${{ needs.ansible.result }} |"
+            echo "| Unit tests | ${{ needs.tests.result }} |"
+            echo
+            echo "These checks prove the desired state is **deployable**, not that"
+            echo "it **deploys**. A standard GitHub-hosted runner has no nested"
+            echo "virtualisation, so no VM is created and no operating system is"
+            echo "installed here."
+            echo
+            echo "The end-to-end path needs a self-hosted KVM runner:"
+            echo "see \`docs/LIMITATIONS.md\` and the disabled \`e2e\` workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail when any check failed
+        if: |
+          needs.configuration.result != 'success' ||
+          needs.templates.result != 'success' ||
+          needs.ansible.result != 'success' ||
+          needs.tests.result != 'success'
+        run: exit 1
