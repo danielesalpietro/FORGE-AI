@@ -1,0 +1,120 @@
+---
+# =====================================================================
+# FORGE-AI :: Molecule scenario for the ubuntu_baseline role
+# =====================================================================
+#   cd tests/molecule/ubuntu_baseline && molecule test
+#
+# Runs the Ubuntu baseline against a systemd-enabled container. That is
+# a genuine but limited substitute for a virtual machine:
+#
+#   WHAT IT DOES VERIFY
+#     * every task is syntactically valid and runs to completion
+#     * the role is idempotent -- Molecule's `idempotence` step fails the
+#       run if a second apply reports any change, which is exactly the
+#       property the drift report depends on
+#     * users, sudoers, sshd_config, chrony and audit rules end up right
+#
+#   WHAT IT CANNOT VERIFY
+#     * ufw -- a container shares the host netfilter tables, so enabling
+#       a default-deny policy inside one is either a no-op or a very bad
+#       idea. The firewall tasks are disabled here and covered by
+#       scripts/smoke-test.sh against a real VM instead.
+#     * qemu-guest-agent -- there is no virtio-serial channel.
+#     * reboot handling.
+#
+# Being explicit about the gap matters: a green Molecule run is not the
+# same as a working host, and treating it as one is how PoCs mislead.
+# =====================================================================
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../ansible/requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: forge-ubuntu-baseline
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    command: /lib/systemd/systemd
+    pre_build_image: true
+    privileged: false
+    # systemd needs a writable cgroup mount and a tmpfs for /run; this
+    # is the minimum that works without --privileged.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+      callbacks_enabled: profile_tasks
+      filter_plugins: ../../../ansible/filter_plugins
+      roles_path: ../../../ansible/roles
+    ssh_connection:
+      pipelining: true
+  inventory:
+    group_vars:
+      all:
+        # The role normally receives these from the dynamic inventory.
+        # Restating the minimum here keeps the scenario self-contained.
+        deployment:
+          name: molecule
+          domain: molecule.local
+          timezone: UTC
+          locale: en_US.UTF-8
+          keyboard_layout: us
+        users:
+          automation_user: forgeops
+        security:
+          ssh_permit_root_login: "no"
+          ssh_password_authentication: "no"
+          management_cidrs: ["192.168.250.0/24"]
+          ssh_authorized_keys:
+            - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMOLECULEMOLECULEMOLECULEMOLECULEMOLECU molecule@fixture"
+        baseline:
+          ubuntu:
+            packages: [curl, jq, chrony, auditd]
+            firewall_enabled: false
+            banner_text: "FORGE-AI Molecule scenario -- managed state."
+            cis_demo_controls: true
+        provisioning_network:
+          gateway: 192.168.250.1
+          ntp_servers: [ntp.ubuntu.com]
+        forge_host:
+          name: forge-ubuntu-baseline
+          profile: ubuntu-server
+          os_family: linux
+        forge_deployment_id: molecule
+        forge_git_commit: molecule
+        forge_git_branch: molecule
+        forge_operator: molecule
+        forge_trigger: molecule
+        forge_linux_admin_group: sudo
+        # See the header: these cannot work inside a container.
+        ubuntu_baseline_manage_firewall: false
+        ubuntu_baseline_allow_reboot: false
+        ubuntu_baseline_manage_ntp: true
+        ubuntu_baseline_manage_audit: true
+
+verifier:
+  name: ansible
+
+scenario:
+  name: ubuntu_baseline
+  test_sequence:
+    - dependency
+    - syntax
+    - create
+    - prepare
+    - converge
+    # The step that matters: a second converge must report zero changes.
+    - idempotence
+    - verify
+    - destroy

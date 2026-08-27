@@ -168,7 +168,14 @@ test_ubuntu() {
 # --- Windows ----------------------------------------------------------
 winrm_probe() {
     local address=$1 port=$2
-    curl --silent --insecure --max-time 15 -X POST \
+    # CURL_TLS_OPTIONS is derived from security.winrm_cert_validation in
+    # config/poc.yml, and main() reports which way it resolved. The PoC
+    # default is "ignore" because the WinRM certificate is generated
+    # self-signed during the Windows specialize phase; setting
+    # winrm_cert_validation: validate makes this probe strict, which is
+    # what it should be once a CA-issued certificate is enrolled.
+    # See docs/SECURITY.md.
+    curl --silent "${CURL_TLS_OPTIONS[@]}" --max-time 15 -X POST \
         -H 'Content-Type: application/soap+xml;charset=UTF-8' \
         --data-binary '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:wsmid="http://schemas.dmtf.org/wbem/wsman/identity/1/wsmanidentity.xsd"><s:Header/><s:Body><wsmid:Identify/></s:Body></s:Envelope>' \
         "https://${address}:${port}/wsman" 2>/dev/null
@@ -312,6 +319,18 @@ main() {
 
     SSH_USER=$(forge_config '.users.automation_user')
     SSH_KEY="${FORGE_SSH_KEY:-$HOME/.ssh/forge-ai-poc}"
+
+    local certificate_policy
+    certificate_policy=$(forge_config '.security.winrm_cert_validation')
+    if [[ "$certificate_policy" == "validate" ]]; then
+        CURL_TLS_OPTIONS=()
+        log_ok "WinRM certificate validation: enforced"
+    else
+        CURL_TLS_OPTIONS=(--insecure)
+        log_warn "WinRM certificate validation: DISABLED (security.winrm_cert_validation=$certificate_policy)"
+        log_dim "the PoC certificate is self-signed by Configure-WinRM.ps1;"
+        log_dim "set winrm_cert_validation: validate once a trusted certificate is enrolled"
+    fi
     VAULT_ARGUMENT=""
     [[ -f "$FORGE_ROOT/.vault-password" ]] && VAULT_ARGUMENT="yes"
 

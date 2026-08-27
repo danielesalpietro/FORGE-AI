@@ -1,0 +1,48 @@
+---
+- name: Prepare the container
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Update the package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 600
+
+    - name: Install what a real host would already have from the autoinstall
+      ansible.builtin.apt:
+        name:
+          - openssh-server
+          - sudo
+          - python3
+        state: present
+
+    - name: Create the automation account the autoinstall seed would have made
+      ansible.builtin.user:
+        name: forgeops
+        shell: /bin/bash
+        groups: sudo
+        append: true
+        create_home: true
+
+    # qemu-guest-agent cannot run in a container. A stub unit lets the
+    # role's service tasks and its final validation run unchanged,
+    # rather than forcing the role to grow a container-only branch.
+    - name: Install a stub qemu-guest-agent unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Stub qemu-guest-agent for the Molecule scenario
+          Documentation=tests/molecule/ubuntu_baseline/prepare.yml
+          [Service]
+          Type=simple
+          ExecStart=/bin/sleep infinity
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/qemu-guest-agent.service
+        mode: "0644"
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true

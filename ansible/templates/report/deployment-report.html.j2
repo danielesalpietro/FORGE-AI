@@ -1,8 +1,15 @@
 <!DOCTYPE html>
+{#
+   Void elements are self-closed and only XML-defined entities are used,
+   so the rendered report parses as strict XML as well as HTML5. That is
+   what lets tests/unit/test_report_rendering.py verify it is
+   well-formed rather than merely browser-tolerable -- a report is
+   evidence, and evidence should be machine-checkable.
+#}
 <html lang="en" data-status="{{ report.status }}">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>FORGE-AI deployment {{ report.deployment_id }}</title>
 <style>
   :root {
@@ -43,8 +50,8 @@
 <main>
   <h1>FORGE-AI deployment report</h1>
   <p class="sub">
-    <code>{{ report.deployment_id }}</code> &middot; environment <code>{{ report.environment }}</code> &middot;
-    commit <code>{{ report.git_commit[:12] }}</code> &middot;
+    <code>{{ report.deployment_id }}</code> · environment <code>{{ report.environment }}</code> ·
+    commit <code>{{ report.git_commit[:12] }}</code> ·
     <span class="badge {{ 'ok' if report.status == 'success' else 'fail' }}">{{ report.status | upper }}</span>
   </p>
 
@@ -72,7 +79,7 @@
     <table>
       <tr><th>OS</th><td>{{ host.os }}</td></tr>
       <tr><th>Address</th><td><code>{{ host.ip_address }}</code> / <code>{{ host.mac_address }}</code></td></tr>
-      <tr><th>Resources</th><td>{{ host.vcpu }} vCPU &middot; {{ host.memory_mb }} MB &middot; {{ host.disk_gb }} GB &middot; {{ host.firmware | upper }}</td></tr>
+      <tr><th>Resources</th><td>{{ host.vcpu }} vCPU · {{ host.memory_mb }} MB · {{ host.disk_gb }} GB · {{ host.firmware | upper }}</td></tr>
       <tr><th>Provisioning</th><td>{{ host.provisioning_result }}</td></tr>
       <tr><th>Configuration</th><td>{{ host.configuration_result }}</td></tr>
       <tr><th>Validation</th><td>{{ host.validation_result }}</td></tr>
