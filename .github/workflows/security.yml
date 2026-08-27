@@ -239,6 +239,21 @@ jobs:
           sarif_file: trivy-config.sarif
           category: trivy-config
 
+      # The scan above writes SARIF and prints nothing, so a
+      # misconfiguration reaches the Security tab without ever being
+      # named in the log. Anyone reading the run then sees a red "Trivy"
+      # check with no way to tell what it found. This repeats the scan as
+      # a table purely so the log says it out loud. exit-code stays 0:
+      # the blocking gate is the next step, this one only reports.
+      - name: Show the configuration findings in the log
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
       # This is the gate that actually blocks. It needs no repository
       # setting, so it works on any fork or private clone.
       - name: Fail on a critical finding
