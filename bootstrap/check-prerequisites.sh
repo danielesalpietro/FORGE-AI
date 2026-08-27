@@ -172,25 +172,94 @@ check_memory() {
     fi
 }
 
-check_disk() {
-    local target="/srv" available required
-    [[ -d "$target" ]] || target="/"
-    available=$(df -BG --output=avail "$target" | tail -1 | tr -dc '0-9')
+# Free space on the filesystem that holds $1, in whole GB. Walks up to
+# the nearest existing ancestor, because the configured directory does
+# not exist yet on a host that has never run the PoC.
+free_gb_for() {
+    local path=$1
+    while [[ ! -d "$path" && "$path" != "/" ]]; do
+        path=$(dirname "$path")
+    done
+    df -BG --output=avail "$path" 2>/dev/null | tail -1 | tr -dc '0-9'
+}
 
-    required=$(forge_config '[.hosts[].disk_gb] | add' 2>/dev/null || echo "")
-    if [[ -z "$required" || "$required" == "0" ]]; then
-        required=180
-        local source="default"
+# Mount point that holds $1, so the report names the volume rather than
+# a directory that may not exist yet.
+mount_for() {
+    local path=$1
+    while [[ ! -d "$path" && "$path" != "/" ]]; do
+        path=$(dirname "$path")
+    done
+    df --output=target "$path" 2>/dev/null | tail -1
+}
+
+check_disk() {
+    # The two consumers can live on different volumes, and on a host with
+    # a small root and a large data disk they usually should. Checking a
+    # hardcoded /srv would report a blocking failure on a host that is in
+    # fact correctly configured -- and would pass a host whose configured
+    # pool is on a full volume. So check what the configuration actually
+    # points at.
+    local pool_path artifacts_dir vm_gb media_gb source
+
+    pool_path=$(forge_config '.storage.libvirt_pool_path' 2>/dev/null || echo "")
+    artifacts_dir=$(forge_config '.storage.artifacts_dir' 2>/dev/null || echo "")
+    vm_gb=$(forge_config '[.hosts[].disk_gb] | add' 2>/dev/null || echo "")
+
+    # Media: the Ubuntu ISO, the Windows ISO, and the ~15 GB that WinPE
+    # plus install.wim occupy once extracted.
+    media_gb=60
+
+    if [[ -z "$vm_gb" || "$vm_gb" == "0" ]]; then
+        vm_gb=120
+        source="default"
     else
-        required=$((required + 60))
-        local source="config/poc.yml targets + 60 GB media"
+        source="config/poc.yml"
+    fi
+    [[ -n "$pool_path" ]]     || pool_path="/var/lib/libvirt/images"
+    [[ -n "$artifacts_dir" ]] || artifacts_dir="/srv/forge-ai"
+
+    local pool_mount artifacts_mount
+    pool_mount=$(mount_for "$pool_path")
+    artifacts_mount=$(mount_for "$artifacts_dir")
+
+    if [[ "$pool_mount" == "$artifacts_mount" ]]; then
+        # One volume carries both, so the requirement is their sum.
+        local available required
+        available=$(free_gb_for "$pool_path")
+        required=$((vm_gb + media_gb))
+        if [[ "${available:-0}" -ge "$required" ]]; then
+            record disk "ok" \
+                "${available} GB free on ${pool_mount} for VM disks and media, ${required} GB needed ($source)"
+        else
+            record disk "error" \
+                "${available} GB free on ${pool_mount}, ${required} GB needed for VM disks + media ($source)" \
+                "point storage.libvirt_pool_path and storage.artifacts_dir in config/poc.yml at a larger volume, or drop a target. qcow2 images are sparse so real usage is lower, but extracted Windows media alone needs ~15 GB"
+        fi
+        return
     fi
 
-    if [[ "$available" -ge "$required" ]]; then
-        record disk "ok" "${available} GB free on $target, ${required} GB needed ($source)"
+    # Split across two volumes: each carries only its own share.
+    local pool_avail artifacts_avail
+    pool_avail=$(free_gb_for "$pool_path")
+    artifacts_avail=$(free_gb_for "$artifacts_dir")
+
+    if [[ "${pool_avail:-0}" -ge "$vm_gb" ]]; then
+        record disk-vm-pool "ok" \
+            "${pool_avail} GB free on ${pool_mount} for VM disks, ${vm_gb} GB needed ($source)"
     else
-        record disk "error" "${available} GB free on $target, ${required} GB needed ($source)" \
-            "qcow2 images are sparse, so the real usage is lower -- but Windows media alone needs ~15 GB extracted"
+        record disk-vm-pool "error" \
+            "${pool_avail} GB free on ${pool_mount}, ${vm_gb} GB needed for VM disks ($source)" \
+            "point storage.libvirt_pool_path in config/poc.yml at a larger volume. qcow2 images are sparse, so real usage is lower than the nominal sum"
+    fi
+
+    if [[ "${artifacts_avail:-0}" -ge "$media_gb" ]]; then
+        record disk-artifacts "ok" \
+            "${artifacts_avail} GB free on ${artifacts_mount} for media, ${media_gb} GB needed"
+    else
+        record disk-artifacts "error" \
+            "${artifacts_avail} GB free on ${artifacts_mount}, ${media_gb} GB needed for media" \
+            "point storage.artifacts_dir in config/poc.yml at a larger volume. Extracted Windows media alone needs ~15 GB"
     fi
 }
 

@@ -180,7 +180,16 @@ forge_config_json() {
         cat "$cache"
         return 0
     fi
-    "$FORGE_ROOT/scripts/validate-config.py" --json --quiet 2>/dev/null
+    # The Makefile honours FORGE_CONFIG, so a script reading the
+    # configuration behind it must honour the same variable or it will
+    # silently report on config/poc.yml while the operator believes they
+    # selected another overlay. `or empty` because make exports the
+    # variable even when it is unset, so it arrives as "".
+    if [[ -n "${FORGE_CONFIG:-}" ]]; then
+        "$FORGE_ROOT/scripts/validate-config.py" --json --quiet --config "$FORGE_CONFIG" 2>/dev/null
+    else
+        "$FORGE_ROOT/scripts/validate-config.py" --json --quiet 2>/dev/null
+    fi
 }
 
 # forge_config '.provisioning_network.gateway'
