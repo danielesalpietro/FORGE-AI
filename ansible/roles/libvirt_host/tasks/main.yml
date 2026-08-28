@@ -77,6 +77,12 @@
     - { path: "{{ storage.log_dir }}/guests" }
     - { path: "{{ storage.report_dir }}" }
     - { path: "{{ storage.artifacts_dir }}/config" }
+    # libvirt's "dir" pool type requires the target to exist before the
+    # pool can be started -- true even when libvirt_pool_path is left at
+    # its default (/var/lib/libvirt/images, created by the libvirt-daemon
+    # package itself, which is why this was never missed before it got
+    # pointed at a custom path under artifacts_dir).
+    - { path: "{{ storage.libvirt_pool_path }}" }
     # The state service runs as UID 10001 inside its container and needs
     # to write here; see compose/state-service/Dockerfile.
     - { path: "{{ storage.state_dir }}", owner: "10001", group: "10001", mode: "0750" }
