@@ -423,4 +423,74 @@ creato da questo run sia che esistesse già.
 
 **Commit**: `a6494ed`.
 
-**Stato**: risolto, da confermare nel prossimo run.
+**Stato**: risolto — confermato: il playbook per la prima volta supera
+per intero lo Stage 6/7, arrivando allo Stage 7/7 (verifica).
+
+## Bug 13 — Stessa 403 di Gitea, terza occorrenza, nella verifica finale
+
+**Sintomo**: risolto il Bug 12, `bootstrap.sh` arriva per la prima
+volta allo Stage 7/7 (verifica) e fallisce lì:
+`[FAIL] Gitea is not answering at http://127.0.0.1:3000/api/v1/version`
+— unico endpoint su 4 a fallire (`curl -fsS` tratta un 403 come
+errore).
+
+**Causa**: identica ai Bug 8 e 10 — terza occorrenza dello stesso
+endpoint auth-gated (`/api/v1/version`), questa volta nell'array
+`endpoints` di `stage_verify()`.
+
+**Correzione**: sostituito con `/api/healthz`, stesso pattern già
+applicato altrove.
+
+**Commit**: `35e5a50`.
+
+**Stato**: risolto.
+
+---
+
+## Esito finale: `bootstrap.sh` completato con successo, `EXIT_CODE=0`
+
+**La prima esecuzione riuscita per intero in questo repository.**
+Tredici bug reali trovati e corretti in sequenza (Bug 1-13 sopra),
+ognuno emerso solo dopo aver risolto il precedente — nessuno scoperto
+per ispezione statica, tutti trovati eseguendo davvero la pipeline e
+leggendo l'errore reale ogni volta.
+
+**Verificato riga per riga nel log completo** (non solo l'ultima
+schermata):
+
+    ==> Stage 1/7: configuration        [ ok ] configuration is valid
+    ==> Stage 2/7: secrets              [ ok ] tutti i 7 controlli sui secret
+    ==> Stage 3/7: prerequisites        (READY, passato)
+    ==> Stage 4/7: provisioning network [ ok ] virbr-forge is up with 192.168.250.1
+    ==> Stage 5/7: control plane        (completato, ~3-5 min, Docker Compose)
+    ==> Stage 6/7: Gitea and Semaphore  [ ok ] Gitea is answering
+                                         [ ok ] Semaphore is answering
+                                         [ ok ] token Gitea e Semaphore nel vault
+    ==> Stage 7/7: verification         [ ok ] boot artefact server
+                                         [ ok ] provisioning state service
+                                         [ ok ] Gitea
+                                         [ ok ] Semaphore
+
+    EXIT_CODE=0
+
+**Riepilogo dei tredici bug** (dettaglio completo sopra, hash commit
+inclusi): 1) `src:` template relativo al ruolo non trova
+`ansible/templates/` condiviso (9 ruoli). 2) ruolo `libvirt_host` mai
+collegato alla pipeline. 3) pool libvirt punta a una directory mai
+creata. 4) `jmespath` mancante dai requirements Python. 5) probe DHCP
+con `tcpdump -G/-W` senza `-w`, mai limitato nel tempo — bloccato
+13+ minuti. 6) `command -v` via il modulo `command` di Ansible, mai
+funzionante per costruzione. 7) due riferimenti template condivisi
+sfuggiti al giro iniziale (playbook diretto + lookup plugin). 8-10)
+Gitea/Semaphore raggiunti sulla porta sbagliata (mai pubblicata) sia in
+`bootstrap.sh` che nel ruolo `gitea_config`, più l'endpoint
+`/api/v1/version` auth-gated usato per il probe di readiness. 11)
+utente admin di Gitea mai creato nonostante fosse documentato come
+compito di `bootstrap.sh`. 12) risoluzione dell'id del progetto
+Semaphore basata su un segnale "changed" inaffidabile. 13) stesso bug
+8/10 dell'endpoint Gitea, terza occorrenza, nella verifica finale.
+
+**Non ancora eseguito**: `make prepare-media`, `make provision`,
+`make validate` — il resto del ciclo di vita del PoC (Fasi 6-10 del
+piano originale), suggerito dal riepilogo finale di `bootstrap.sh`
+stesso come prossimo passo.
