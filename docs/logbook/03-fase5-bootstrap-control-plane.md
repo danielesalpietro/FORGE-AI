@@ -387,4 +387,40 @@ creazione del token subito dopo.
 
 **Commit**: `e9cbf5b`.
 
+**Stato**: risolto — confermato: log mostra `[ok] Gitea token stored in
+the vault`, e il task `gitea_config : Require an API token` passa.
+
+## Bug 12 — `is changed` inaffidabile su `ansible.builtin.uri`, id del progetto Semaphore mai risolto
+
+**Sintomo**: risolti i Bug 9-11, il playbook avanza per la prima volta
+oltre Gitea, crea il progetto Semaphore, e fallisce su
+`Resolve the project id`:
+`Error while resolving value for 'forge_semaphore_project_id': No
+first item, sequence was empty.`
+
+**Verifica prima di ipotizzare** (i task coinvolti hanno `no_log:
+true`, quindi il log non mostra i dati reali): login diretto via
+`curl` con le credenziali admin in `compose/.env` contro
+`http://127.0.0.1:3001/api/projects` (raggiungibile grazie al Bug 9) —
+il progetto **esiste davvero**, creato pochi secondi prima
+(`"FORGE-AI GitOps PoC"`, id 1). La creazione era quindi riuscita.
+
+**Causa**: `Resolve the project id` sceglieva tra due rami in base a
+`forge_semaphore_project_created is changed`: se vero, leggere l'id
+dalla risposta di creazione; altrimenti, cercarlo nella lista
+progetti **letta prima della creazione** (quindi vuota, la primissima
+volta che questo pezzo di pipeline veniva eseguito per intero).
+Verificato empiricamente che la creazione fosse riuscita ma `is
+changed` abbia comunque instradato sul ramo sbagliato — il modulo
+`ansible.builtin.uri` non offre una rilevazione di "changed"
+affidabile su cui basare una scelta del genere.
+
+**Correzione**: rimossa la dipendenza da `is changed`. Aggiunto un
+nuovo task che rilegge sempre la lista progetti subito prima di
+risolvere l'id (una GET in più, economica e idempotente,
+`changed_when: false`) — corretto sia che il progetto sia stato appena
+creato da questo run sia che esistesse già.
+
+**Commit**: `a6494ed`.
+
 **Stato**: risolto, da confermare nel prossimo run.
