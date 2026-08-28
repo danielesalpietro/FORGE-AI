@@ -958,3 +958,68 @@ Esattamente lo stato "fatto" richiesto dalla Fase 4 del piano
 **Stato**: fatto. Fase 4 completa. Prossimo: Fase 5 (`bootstrap.sh`,
 `test-integration`, `test-molecule` — mai eseguiti in nessun ambiente
 prima d'ora).
+
+## ~2026-08-28 18:4x UTC — Download ISO Windows completato, upload sul datastore: due fallimenti prima del successo
+
+**Osservato**: download su Windows completato,
+`windows-server-2025-eval-en-us.iso` = 8.152.356.864 byte, identico al
+`Content-Length` verificato in anticipo — nessun troncamento.
+
+**Tentativo 1 (fallito, `pscp`, autenticazione a password)**:
+
+    pscp.exe -pw "$PW" windows-server-2025-eval-en-us.iso root@192.168.1.133:/vmfs/volumes/datastore1/ISOs/...
+
+**Osservato**: il task in background è stato segnalato come "completato
+con successo" (exit code 0) dal wrapper della sessione, ma il file
+reale sul datastore era **422MB, non 7.6GB**. Il log conteneva
+`FATAL ERROR: Network error: Software caused connection abort` intorno
+al 5% del trasferimento. **Non ci si è fidati del riepilogo
+automatico** — verificato con `ls -la` sul datastore, come da regola
+del progetto (CLAUDE.md, "solo informazioni concrete"). Il file parziale
+è stato rimosso prima del secondo tentativo.
+
+**Tentativo 2 (fallito, `scp` nativo OpenSSH con chiave e keepalive)**:
+
+    scp -i ~/.ssh/forge_ai_esxi_rsa -o ServerAliveInterval=15 -o ServerAliveCountMax=6 ...
+
+**Osservato**: arrivato più lontano (2.53GB, ~33%) ma fallito di nuovo
+con un errore diverso: `Connection reset by peer`. Due meccanismi di
+trasporto diversi (password/`pscp` vs chiave/`scp`), stesso esito di
+fondo (connessione che cade a metà su un file di questa dimensione) —
+indizio di un problema non specifico al singolo strumento.
+
+**Verifica prima di un terzo tentativo**: controllati i timeout di shell
+SSH configurati sull'host, per escludere che fosse ESXi a chiudere
+attivamente la sessione:
+
+    esxcli system settings advanced list -o /UserVars/ESXiShellTimeOut            # Int Value: 0 (disabilitato)
+    esxcli system settings advanced list -o /UserVars/ESXiShellInteractiveTimeOut # Int Value: 0 (disabilitato)
+
+**Osservato**: entrambi disabilitati — non è un timeout di shell
+configurato lato ESXi. Causa esatta della caduta di connessione non
+ulteriormente indagata (rete instabile su trasferimenti SSH lunghi e
+pesanti, causa non isolata con certezza), ma non è né un timeout ESXi
+né un errore di sintassi dei comandi.
+
+**Tentativo 3 (riuscito)**: cambiato meccanismo di trasporto invece di
+ritentare lo stesso — upload HTTPS diretto al datastore, lo stesso
+endpoint usato dal browser datastore del client vSphere per i file
+grandi:
+
+    curl -k -T windows-server-2025-eval-en-us.iso \
+      "https://192.168.1.133/folder/ISOs/windows-server-2025-eval-en-us.iso?dcPath=ha-datacenter&dsName=datastore1" \
+      -u "root:$PW"
+
+**Osservato**: velocità di trasferimento nettamente più stabile
+(~35MB/s osservati, contro un calo progressivo fino a <1MB/s degli
+altri due tentativi). Completato senza errori. **Verificato con
+`ls -la` sul datastore** (non dal solo esito del task): `8152356864`
+byte — identico al file sorgente.
+
+**Stato**: fatto. Entrambe le ISO (Ubuntu 24.04.4 e Windows Server 2025
+Eval) ora sul datastore `datastore1/ISOs/`, riusabili per qualunque VM
+futura indipendentemente dal ciclo di vita di questa. Nota per il
+prossimo setup: per file di grandi dimensioni verso il datastore ESXi,
+preferire da subito l'upload HTTPS (`/folder/...?dcPath=...&dsName=...`)
+invece di `scp`/`pscp`, che su questa rete si sono dimostrati inaffidabili
+oltre qualche GB.

@@ -10,6 +10,29 @@ richiede di rifare la VM da zero — non solo la prima volta.
 Non sostituisce `handoff_setup_esxi.md` (il piano completo): è un
 controllo mirato sui punti che hanno già causato perdite di tempo.
 
+## Trasferimento di file grandi (ISO) verso un datastore ESXi
+
+- [ ] Per file di alcuni GB o più, **non usare `scp`/`pscp`** come primo
+      tentativo: su questa rete entrambi sono caduti a metà trasferimento
+      (errori diversi — `Software caused connection abort` con `pscp`,
+      `Connection reset by peer` con `scp` nativo — stessa sostanza),
+      anche con keepalive SSH attivi. Causa esatta non isolata (non è un
+      timeout di shell ESXi: `UserVars/ESXiShellTimeOut` e
+      `UserVars/ESXiShellInteractiveTimeOut` erano entrambi `0`).
+- [ ] Usare invece l'upload HTTPS diretto al datastore (lo stesso
+      meccanismo del browser datastore del client vSphere):
+
+      curl -k -T <file-locale> \
+        "https://<host-esxi>/folder/<sottocartella>/<nome-file>?dcPath=ha-datacenter&dsName=<datastore>" \
+        -u "root:<password>"
+
+      Verificato più stabile (~35MB/s sostenuti) e completato senza
+      errori dove due tentativi via SCP erano falliti.
+- [ ] **Verificare sempre la dimensione del file arrivato con `ls -la`
+      sul datastore** prima di considerare un upload riuscito — un task
+      in background può essere segnalato "completato con successo"
+      anche quando il trasferimento reale si è interrotto a metà.
+
 ## Prerequisiti locali, prima di iniziare
 
 - [ ] **Docker Desktop attivo** (`docker info` risponde) — serve per
