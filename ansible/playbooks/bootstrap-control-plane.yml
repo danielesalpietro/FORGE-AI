@@ -37,7 +37,7 @@
       # Written outside the container image so a change to the template
       # does not require a rebuild.
       ansible.builtin.template:
-        src: nginx/boot-server.conf.j2
+        src: "{{ forge_shared_templates_dir }}/nginx/boot-server.conf.j2"
         dest: "{{ storage.artifacts_dir }}/config/boot-server.conf"
         owner: root
         group: root

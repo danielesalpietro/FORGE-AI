@@ -126,7 +126,7 @@
 
 - name: Render the environment definition
   ansible.builtin.set_fact:
-    forge_semaphore_environment_json: "{{ lookup('ansible.builtin.template', 'semaphore/environment.json.j2') }}"
+    forge_semaphore_environment_json: "{{ lookup('ansible.builtin.template', forge_shared_templates_dir ~ '/semaphore/environment.json.j2') }}"
   tags: [bootstrap, gitops]
 
 - name: Create the environment entry
