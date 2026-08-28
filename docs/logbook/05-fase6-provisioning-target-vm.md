@@ -484,3 +484,57 @@ un pattern ripetibile che giustificherà un'indagine più approfondita
 (es. recuperare `/var/log/installer/` dal target una volta accessibile,
 o disabilitare `unattended-upgrades` dai late-commands come
 mitigazione).
+
+**Rettifica — non era uno stallo del secondo tentativo**: controllando
+lo stato dopo il reset, la cronologia mostra che l'installazione
+(**tentativo 2**, non 3) era in realtà arrivata a `installed` alle
+23:22:17 — pochi minuti prima del mio reset, con tutta probabilità
+proprio durante l'ultima fase silenziosa (late-commands, POST finale a
+`/api/state`, preparazione al reboot) che avevo scambiato per uno
+stallo genuino sulla base del calo di CPU. Il `virsh reset` non ha
+quindi consumato il terzo tentativo per un reinstall fallito, ma ha
+verosimilmente solo interrotto/duplicato il reboot naturale di fine
+installazione — cosa che ha comunque portato alla luce un problema
+reale e distinto, descritto sotto (bug 22). La diagnosi CPU/SSH non è
+stata inutile: ha prodotto le prove che la macchina fosse bloccata su
+*qualcosa*, solo non sulla causa che avevo ipotizzato.
+
+## Bug 22 — `sanboot --drive 0x80` non funziona su guest UEFI
+
+**Sintomo**: dopo la conferma che l'installazione **era** riuscita
+(`state: installed`), la VM continuava a non avviarsi verso il sistema
+installato. Uno screenshot mostra l'errore letterale:
+
+    Booting from local disk (drive 0x80)...
+    Booting from SAN device 0x80
+    Boot from SAN device 0x80 failed: No such device (https://ipxe.org/2c222087)
+    [error] Boot attempt failed. Returning to the menu.
+    Could not boot: Connection timed out (https://ipxe.org/4c22e092)
+    Booting from local disk...
+    Booting from SAN device 0x80
+    Boot from SAN device 0x80 failed: No such device (https://ipxe.org/2c222087)
+    [error] Nothing left to boot. Dropping to the iPXE shell.
+
+**Diagnosi**: per un host con stato `installed`, `dispatch()` in
+`compose/state-service/app.py` risponde con lo script generato da
+`script_local()`, che usava `sanboot --no-describe --drive 0x80` per
+"avviare dal disco locale". `sanboot --drive 0x80` è una tecnica
+BIOS/legacy (numero di drive INT13) — questi guest sono **UEFI**
+(`firmware: uefi` in `config/poc.yml`), e su UEFI iPXE non espone un
+"drive 0x80" utilizzabile da `sanboot`, da cui "No such device". Lo
+stesso comando, con lo stesso identico problema, era presente anche in
+`ansible/templates/ipxe/boot.ipxe.j2` (fallback `:localboot`, per un
+host non in `config/poc.yml`) e in `ansible/templates/ipxe/menu.ipxe.j2`
+(voce "boot da disco locale" del menu interattivo di fallback) —
+nessuno dei due era ancora stato esercitato nella pratica, ma
+avrebbero fallito identicamente.
+
+**Correzione applicata**: tutte e tre le occorrenze sostituite con il
+comando iPXE `exit` (nessun argomento) — restituisce il controllo al
+firmware, che prosegue con la propria sequenza di boot già definita in
+`domain.xml.j2` (`<os><boot dev="network"/><boot dev="hd"/></os>`):
+rete già tentata ed esaurita da iPXE stesso, il firmware passa quindi
+al disco. Aggiornato anche il riferimento in `docs/REFERENCES.md`.
+File toccati: `compose/state-service/app.py`,
+`ansible/templates/ipxe/boot.ipxe.j2`,
+`ansible/templates/ipxe/menu.ipxe.j2`, `docs/REFERENCES.md`.

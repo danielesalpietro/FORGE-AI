@@ -274,7 +274,10 @@ selecting by **name** rather than index in both places.
   `\Windows\System32` of the booted image. This is what makes it
   possible to deliver a per-host `Autounattend.xml` without ever writing
   it to the shared SMB export.
-- `sanboot --no-describe --drive 0x80` as the local-disk fallback.
+- Plain `exit` (not `sanboot --drive 0x80`, a BIOS/legacy INT13 trick
+  that fails with "No such device" on these UEFI guests) as the
+  local-disk fallback: it returns control to firmware, which then
+  proceeds to the domain's own next boot option.
 
 ---
 

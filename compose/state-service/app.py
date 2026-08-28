@@ -212,20 +212,19 @@ exit 1
 
 def script_local(host: dict | None, record: dict, reason: str) -> str:
     name = host["name"] if host else record["mac"]
+    # `sanboot --drive 0x80` is a BIOS/legacy INT13 trick; these guests are
+    # UEFI, and iPXE reports "No such device" for it there ("Boot from SAN
+    # device 0x80 failed: No such device", confirmed on real hardware via
+    # `virsh screenshot`). Plain `exit` returns control to firmware, which
+    # then proceeds to the domain's own next boot option (hd) -- the
+    # standard iPXE technique for UEFI local-disk fallback.
     return f"""#!ipxe
 # FORGE-AI state service: local boot
 echo
 echo [state] {name}: {reason}
 echo [state] booting from local disk
 echo
-sanboot --no-describe --drive 0x80 || goto no_disk
-
-:no_disk
-echo [error] no bootable local disk found for {name}.
-echo         The installation may have failed before writing a boot loader.
-echo         Reset the host with: scripts/set-boot-state.sh {record['mac']} new
-sleep 15
-exit 1
+exit
 """
 
 

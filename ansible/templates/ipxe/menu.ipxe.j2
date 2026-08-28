@@ -49,8 +49,13 @@ goto menu
 reboot
 
 :local
-echo Booting from local disk (drive 0x80)...
-sanboot --no-describe --drive 0x80 || goto failed
+# `sanboot --drive 0x80` is a BIOS/legacy INT13 trick; these guests are
+# UEFI, and iPXE reports "No such device" for it here ("Boot from SAN
+# device 0x80 failed: No such device", confirmed on real hardware via
+# `virsh screenshot`). Plain `exit` returns control to firmware, which
+# then proceeds to the domain's own next boot option (hd).
+echo Booting from local disk...
+exit
 
 :failed
 echo
