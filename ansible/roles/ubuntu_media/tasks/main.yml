@@ -45,7 +45,7 @@
          if media.ubuntu.iso_sha256 | default('') | length > 0
          else ((forge_ubuntu_sha256sums.content | default('')).splitlines()
                | select('search', media.ubuntu.iso_url | basename)
-               | map('regex_replace', '^([0-9a-f]{64}).*$', '\\1')
+               | map('regex_replace', '^([0-9a-f]{64}).*$', '\1')
                | first | default('')) }}
   when: ubuntu_media_verify_checksum | bool
   tags: [media, linux]
