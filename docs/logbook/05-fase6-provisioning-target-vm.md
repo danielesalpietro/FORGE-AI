@@ -353,3 +353,49 @@ il proseguimento del boot. Non approfondito ulteriormente: cosmetico
 l'installazione. Da rivisitare se si vuole una telemetria completa.
 
 **Commit**: `4117d49`.
+
+## Bug 21 — 4096 MB RAM insufficiente per l'autoinstall `url=` di casper (ISO da 3.3 GB)
+
+**Sintomo**: dopo i bug 19-20, il kernel Linux boota davvero e casper
+inizia a scaricare l'ISO (`GET /iso/... "Wget"` nel log nginx), ma il
+download si ferma **sempre** a 1918705422 byte (~1.79 GB) su 3303444480
+byte totali (~3.3 GB), senza errori visibili e senza altre richieste
+successive. Tre screenshot consecutivi (`virsh screenshot`), a diversi
+minuti di distanza, mostrano il **framebuffer identico bit-per-bit**,
+fermo al messaggio kernel `8021q: adding VLAN 0 to HW filter on device
+eth0` (timestamp kernel 7.919543s).
+
+**Diagnosi**: prima ipotesi (RAM esaurita in questo momento) scartata
+con una verifica reale — `virsh dommemstat poc-ubuntu-01` mostra `unused
+3830524` (KiB), quasi tutti i 4096 MB liberi in quel momento, non un
+OOM in corso. Verificato invece se la VM sta eseguendo codice: tre
+letture di `cpu.time` da `virsh domstats --cpu-total` a 2s di distanza
+mostrano un incremento minimo (~1% di CPU) — la VM è viva a livello di
+hypervisor (non crashata) ma **bloccata**, non sta facendo lavoro
+utile.
+
+Il taglio esatto e ripetibile a ~1.8 GB, ben al di sotto della RAM
+totale disponibile (4 GB) ma coerente con un'area di staging
+RAM-backed (tmpfs) dimensionata come frazione della RAM totale da
+casper per il metodo di installazione `url=` (l'intera ISO va
+scaricata in un'area temporanea in RAM prima che qualunque disco venga
+partizionato), è il segnale più forte: con soli 4096 MB configurati,
+non c'è spazio sufficiente per un'ISO da 3.3 GB più l'ambiente live
+stesso.
+
+**Grado di certezza**: il meccanismo esatto (nome/dimensione del tmpfs
+usato da casper) **non è stato confermato via shell nel guest** — la
+VM era bloccata, senza accesso interattivo. L'evidenza (byte esatti del
+taglio, CPU quasi ferma, nessun ulteriore errore/richiesta) è coerente
+con questa spiegazione ma resta un'inferenza, non una conferma diretta;
+segnalato esplicitamente come tale invece di affermarlo come fatto
+accertato.
+
+**Correzione applicata**: `memory_mb` di `poc-ubuntu-01` portato da
+4096 a 8192 in `config/poc.yml` (locale all'host, non in git) e nel
+template di esempio `config/poc.example.yml` (in git, per non far
+ripetere lo stesso problema a chi clona il repo). `vm_lifecycle`'s
+"Redefine domains whose XML changed" già gestisce esattamente questo
+caso (un cambio di `memory_mb` che deve raggiungere un dominio libvirt
+già esistente) — nessuna modifica di codice necessaria, solo al
+config.

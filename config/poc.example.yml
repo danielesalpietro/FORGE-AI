@@ -58,7 +58,14 @@ hosts:
     ip_address: 192.168.250.21
     mac_address: "52:54:00:25:00:21"
     vcpu: 2
-    memory_mb: 4096
+    # 4096 is not enough here: casper's url= autoinstall path stages the
+    # whole ISO in a RAM-backed tmpfs before it can partition anything,
+    # and on real hardware a 4GB guest hangs indefinitely partway through
+    # the fetch (~1.9GB in, no error, near-zero CPU, screen frozen) --
+    # confirmed via `virsh domstats --cpu-total` showing flat cpu.time
+    # and a partial nginx access-log entry for the ISO GET. 8192 gives
+    # enough headroom for the ~3.3GB ISO plus the live environment.
+    memory_mb: 8192
     disk_gb: 40
     firmware: uefi
 
