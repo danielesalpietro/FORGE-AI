@@ -22,7 +22,7 @@
 
 - name: Re-render the domain XML with local disk as the first boot device
   ansible.builtin.template:
-    src: libvirt/domain.xml.j2
+    src: "{{ playbook_dir }}/../templates/libvirt/domain.xml.j2"
     dest: "{{ storage.artifacts_dir }}/config/{{ item.name }}.xml"
     owner: root
     group: root

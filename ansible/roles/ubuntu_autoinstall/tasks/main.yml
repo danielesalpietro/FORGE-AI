@@ -65,7 +65,7 @@
 
 - name: Render the autoinstall user-data
   ansible.builtin.template:
-    src: ubuntu/user-data.j2
+    src: "{{ playbook_dir }}/../templates/ubuntu/user-data.j2"
     dest: "{{ storage.http_root }}/ubuntu/{{ item.name }}/user-data"
     owner: root
     group: root
@@ -86,7 +86,7 @@
 
 - name: Render the autoinstall meta-data
   ansible.builtin.template:
-    src: ubuntu/meta-data.j2
+    src: "{{ playbook_dir }}/../templates/ubuntu/meta-data.j2"
     dest: "{{ storage.http_root }}/ubuntu/{{ item.name }}/meta-data"
     owner: root
     group: root
@@ -101,7 +101,7 @@
 
 - name: Render the autoinstall vendor-data
   ansible.builtin.template:
-    src: ubuntu/vendor-data.j2
+    src: "{{ playbook_dir }}/../templates/ubuntu/vendor-data.j2"
     dest: "{{ storage.http_root }}/ubuntu/{{ item.name }}/vendor-data"
     owner: root
     group: root

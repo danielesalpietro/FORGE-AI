@@ -207,7 +207,7 @@
 
 - name: Render the per-host WinPE startup script
   ansible.builtin.template:
-    src: windows/startnet.cmd.j2
+    src: "{{ playbook_dir }}/../templates/windows/startnet.cmd.j2"
     dest: "{{ storage.http_root }}/windows/{{ item.name }}/startnet.cmd"
     owner: root
     group: root

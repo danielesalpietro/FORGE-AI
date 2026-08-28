@@ -16,7 +16,7 @@
 
 - name: Render the iPXE entry point
   ansible.builtin.template:
-    src: ipxe/boot.ipxe.j2
+    src: "{{ playbook_dir }}/../templates/ipxe/boot.ipxe.j2"
     dest: "{{ storage.http_root }}/boot/boot.ipxe"
     owner: root
     group: root
@@ -26,7 +26,7 @@
 
 - name: Render the fallback menu
   ansible.builtin.template:
-    src: ipxe/menu.ipxe.j2
+    src: "{{ playbook_dir }}/../templates/ipxe/menu.ipxe.j2"
     dest: "{{ storage.http_root }}/boot/menu.ipxe"
     owner: root
     group: root
@@ -36,7 +36,7 @@
 
 - name: Render the per-host Ubuntu installer scripts
   ansible.builtin.template:
-    src: ipxe/host-ubuntu-install.ipxe.j2
+    src: "{{ playbook_dir }}/../templates/ipxe/host-ubuntu-install.ipxe.j2"
     dest: "{{ storage.http_root }}/boot/host-{{ item.mac_address | mac_hyphen }}-install.ipxe"
     owner: root
     group: root
@@ -51,7 +51,7 @@
 
 - name: Render the per-host Windows installer scripts
   ansible.builtin.template:
-    src: ipxe/host-windows-install.ipxe.j2
+    src: "{{ playbook_dir }}/../templates/ipxe/host-windows-install.ipxe.j2"
     dest: "{{ storage.http_root }}/boot/host-{{ item.mac_address | mac_hyphen }}-install.ipxe"
     owner: root
     group: root

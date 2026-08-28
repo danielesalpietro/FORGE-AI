@@ -55,7 +55,7 @@
 
 - name: Render Autounattend.xml
   ansible.builtin.template:
-    src: windows/Autounattend.xml.j2
+    src: "{{ playbook_dir }}/../templates/windows/Autounattend.xml.j2"
     dest: "{{ storage.http_root }}/windows/{{ item.name }}/Autounattend.xml"
     owner: root
     group: root
@@ -75,7 +75,7 @@
 
 - name: Render SetupComplete.cmd
   ansible.builtin.template:
-    src: windows/SetupComplete.cmd.j2
+    src: "{{ playbook_dir }}/../templates/windows/SetupComplete.cmd.j2"
     dest: "{{ storage.http_root }}/windows/{{ item.name }}/SetupComplete.cmd"
     owner: root
     group: root
@@ -91,7 +91,7 @@
 
 - name: Render Configure-WinRM.ps1
   ansible.builtin.template:
-    src: windows/Configure-WinRM.ps1.j2
+    src: "{{ playbook_dir }}/../templates/windows/Configure-WinRM.ps1.j2"
     dest: "{{ storage.http_root }}/windows/{{ item.name }}/Configure-WinRM.ps1"
     owner: root
     group: root
