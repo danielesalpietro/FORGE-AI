@@ -1023,3 +1023,54 @@ prossimo setup: per file di grandi dimensioni verso il datastore ESXi,
 preferire da subito l'upload HTTPS (`/folder/...?dcPath=...&dsName=...`)
 invece di `scp`/`pscp`, che su questa rete si sono dimostrati inaffidabili
 oltre qualche GB.
+
+## ~2026-08-28 18:1x UTC — Checkpoint: snapshot VM prima della Fase 5
+
+**Contesto**: su richiesta di Daniele ("ricorda di fare qualche
+snapshot di tanto in tanto come checkpoint"), snapshot della VM prima
+di `bootstrap.sh` — stato noto buono (Fase 4 completa, `READY`, `/srv`
+montato, secrets generati, entrambe le ISO sul datastore).
+
+**Comando/i**:
+
+    vim-cmd vmsvc/snapshot.create 8 'pre-bootstrap-fase5' '<descrizione>' false false
+
+**Osservato**: `vim-cmd vmsvc/snapshot.get 8` conferma lo snapshot
+(Id 1, nome e descrizione corretti, timestamp 8/28/2026 16:16:54). Nota
+minore: il campo `Snapshot State` riportava "powered off" nonostante la
+VM fosse davvero accesa (verificato subito dopo con
+`vim-cmd vmsvc/power.getstate 8` -> `Powered on`) — apparente stranezza
+cosmetica di `vim-cmd`, non un problema reale, non approfondita oltre.
+
+**Stato**: fatto. Prassi da ripetere ad ogni checkpoint significativo
+d'ora in avanti, non solo questa volta.
+
+## ~2026-08-28 18:2x UTC — Primo `bootstrap.sh`: fallito allo Stage 3/7, stesso problema sudo già visto
+
+**Osservato**: il task in background è stato di nuovo segnalato
+"completato" (exit code 0) dal riepilogo automatico, ma il file di log
+con l'exit code catturato esplicitamente mostrava `EXIT_CODE=1`. **Non
+ci si è fidati del riepilogo automatico una seconda volta** — stessa
+cautela già presa per l'upload dell'ISO Windows.
+
+**Osservato dal log completo**: Stage 1/7 (configuration) e Stage 2/7
+(secrets) passati puliti. Stage 3/7 (prerequisites) fallito:
+
+    [FAIL] privileges: no root or sudo access
+           libvirt, dnsmasq, /srv and Docker all need it
+    NOT READY -- 1 error(s), 2 warning(s) across 33 checks
+
+**Causa**: `bootstrap.sh` chiama `check-prerequisites.sh` al suo
+interno senza `sudo` — stesso problema già risolto a mano nella voce
+sulla Fase 4 (`sudo -E env PATH=$PATH ...`), ma `bootstrap.sh` stesso
+non lo fa automaticamente. Non ancora chiaro se sia un bug di
+repository (lo script dovrebbe forse auto-elevarsi, o documentare che va
+lanciato con sudo) o un comportamento voluto — da verificare prima di
+aprire un'issue.
+
+**Correzione applicata per questo run**: rilanciare `bootstrap.sh`
+stesso con `sudo -E env PATH=$PATH`, come già fatto per
+`check-prerequisites.sh`.
+
+**Stato**: in corso, esito non ancora noto al momento della stesura di
+questa voce.
