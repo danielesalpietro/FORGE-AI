@@ -210,8 +210,13 @@ services:
       - proxy-cache:/var/cache/nginx
       - proxy-run:/var/run
     ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:${PROXY_HTTP_PORT:-8081}:8081"
-      - "${BIND_ADDRESS:-127.0.0.1}:${PROXY_HTTPS_PORT:-8443}:8443"
+      # Deliberately its own variable, not BIND_ADDRESS: that one also
+      # gates Gitea's git-over-SSH port (2222) above, which has no
+      # reason to follow the web UIs onto the LAN. Defaults to loopback
+      # like everything else; set PROXY_BIND_ADDRESS to the host's LAN
+      # IP (or 0.0.0.0) to reach Gitea/Semaphore without an SSH tunnel.
+      - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${PROXY_HTTP_PORT:-8081}:8081"
+      - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${PROXY_HTTPS_PORT:-8443}:8443"
     networks:
       backend: {aliases: [proxy]}
     healthcheck:
