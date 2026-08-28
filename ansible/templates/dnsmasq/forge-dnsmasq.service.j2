@@ -41,15 +41,18 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictNamespaces=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-MemoryDenyWriteExecute=yes
-LockPersonality=yes
-SystemCallArchitectures=native
+# No further seccomp-installing sandboxing here (ProtectKernelTunables,
+# ProtectKernelModules, ProtectControlGroups, RestrictNamespaces,
+# RestrictRealtime, RestrictSUIDSGID, MemoryDenyWriteExecute,
+# LockPersonality, SystemCallArchitectures=native): confirmed by
+# bisecting each one individually on the real host that EVERY one of
+# them, alone, makes dnsmasq's own internal capset() call fail with
+# "setting capabilities failed: Operation not permitted" -- while the
+# capability directives above and this ProtectSystem/ProtectHome/
+# PrivateTmp trio (mount-namespace-only, no seccomp filter) do not.
+# The exact syscall these filters block was not identified further;
+# what's confirmed is that adding any of them breaks TFTP/DHCP outright,
+# so they are deliberately left off rather than fought one at a time.
 ReadWritePaths={{ storage.state_dir }} {{ storage.log_dir }}
 ReadOnlyPaths={{ storage.tftp_root }} {{ forge_dnsmasq_config | dirname }}
 
