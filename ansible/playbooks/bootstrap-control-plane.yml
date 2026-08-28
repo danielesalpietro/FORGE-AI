@@ -45,6 +45,30 @@
       become: true
       tags: [bootstrap]
 
+    - name: Read the proxy's configured bind address
+      ansible.builtin.command:
+        argv: ["sed", "-n", "s/^PROXY_BIND_ADDRESS=//p", "{{ forge_compose_env_file }}"]
+      register: forge_proxy_bind_address_raw
+      changed_when: false
+      failed_when: false
+      tags: [bootstrap]
+
+    - name: Render the login banner
+      # Not security-sensitive, so it stays outside the "was becoming
+      # root a problem again" concerns that hit the venv/vault earlier
+      # tonight -- update-motd.d scripts are always root-owned.
+      ansible.builtin.template:
+        src: "{{ forge_shared_templates_dir }}/motd/50-forge-ai.j2"
+        dest: /etc/update-motd.d/50-forge-ai
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+      vars:
+        forge_proxy_bind_address_is_loopback: >-
+          {{ (forge_proxy_bind_address_raw.stdout | default('') | trim) in ['', '127.0.0.1'] }}
+      tags: [bootstrap]
+
     - name: Confirm the compose environment file exists
       ansible.builtin.stat:
         path: "{{ forge_compose_env_file }}"
