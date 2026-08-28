@@ -413,7 +413,10 @@ stage_verify() {
     local -a endpoints=(
         "http://${gateway}:${boot_port}/healthz|boot artefact server"
         "http://${gateway}:${boot_port}/api/healthz|provisioning state service"
-        "http://127.0.0.1:$(forge_config '.control_plane.gitea_http_port')/api/v1/version|Gitea"
+        # /api/v1/version needs a signed-in user on this Gitea image
+        # (see the identical fix in stage_gitops above); /api/healthz
+        # does not.
+        "http://127.0.0.1:$(forge_config '.control_plane.gitea_http_port')/api/healthz|Gitea"
         "http://127.0.0.1:$(forge_config '.control_plane.semaphore_http_port')/api/ping|Semaphore"
     )
 
