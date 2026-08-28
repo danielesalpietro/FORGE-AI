@@ -42,18 +42,22 @@
 - name: Listen for foreign DHCP traffic on the provisioning bridge
   # tcpdump exits 0 with no packets captured, so a clean network and a
   # successful capture are distinguished by the packet count, not by rc.
+  #
+  # tcpdump's own -G/-W rotate a *file* tcpdump writes to; without -w
+  # they do nothing, so nothing ever bounded how long this waited for
+  # -c 5 packets that may never arrive on a quiet bridge. `timeout`
+  # sends SIGTERM at the real deadline instead; tcpdump exits cleanly
+  # and prints whatever --immediate-mode already flushed to stdout.
   ansible.builtin.command:
     argv:
+      - timeout
+      - "{{ prereq_dhcp_probe_timeout }}s"
       - tcpdump
       - -i
       - "{{ provisioning_network.bridge }}"
       - -n
       - -c
       - "5"
-      - -W
-      - "1"
-      - -G
-      - "{{ prereq_dhcp_probe_timeout }}"
       - --immediate-mode
       - "udp port 67 or udp port 68"
   become: true
