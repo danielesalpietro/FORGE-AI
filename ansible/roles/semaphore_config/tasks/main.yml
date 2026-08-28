@@ -73,13 +73,29 @@
   no_log: true
   tags: [bootstrap, gitops]
 
+- name: Re-list the projects
+  # ansible.builtin.uri gives no reliable "changed" signal to branch on
+  # (verified: the project above was created successfully -- confirmed
+  # against the live API directly -- yet "is changed" still routed
+  # resolution through the pre-creation, empty list below). Always
+  # re-fetching is one cheap extra GET and is correct either way,
+  # instead of trusting a distinction that already proved false once.
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/projects"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_projects
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
 - name: Resolve the project id
   ansible.builtin.set_fact:
     forge_semaphore_project_id: >-
-      {{ forge_semaphore_project_created.json.id
-         if forge_semaphore_project_created is changed
-         else (forge_semaphore_projects.json | selectattr('name', 'eq', gitops.semaphore_project_name)
-               | map(attribute='id') | first) }}
+      {{ forge_semaphore_projects.json | selectattr('name', 'eq', gitops.semaphore_project_name)
+         | map(attribute='id') | first }}
   tags: [bootstrap, gitops]
 
 - name: Report the project id
