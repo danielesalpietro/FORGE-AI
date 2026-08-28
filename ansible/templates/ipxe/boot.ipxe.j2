@@ -16,6 +16,12 @@ set log-url ${base}/api/log
 # ---------------------------------------------------------------------
 # Console + identification
 # ---------------------------------------------------------------------
+# Every divider below uses '=', never '-': iPXE's echo parses a leading
+# '-' as an option flag (its usage is "echo [-n|--n] [...]"), and a
+# divider made of dashes was rejected as "Unrecognised option ...",
+# aborting the whole script with no fallback -- confirmed on real
+# hardware via `virsh screenshot` (serial console shows nothing for
+# this guest; the framebuffer was the only way to see the error).
 echo
 echo ===============================================================
 echo  FORGE-AI GitOps provisioning  --  environment {{ deployment.name }}
@@ -24,7 +30,7 @@ echo  MAC        : ${net0/mac}
 echo  IP         : ${net0/ip}
 echo  Platform   : ${platform}  Arch: ${buildarch}
 echo  Boot server: ${base}
-echo ---------------------------------------------------------------
+echo ===============================================================
 echo
 
 # Report that this client reached iPXE. Failure is non-fatal: the boot

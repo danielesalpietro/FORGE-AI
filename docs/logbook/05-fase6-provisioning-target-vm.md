@@ -233,3 +233,57 @@ Il firmware PXE ha scaricato `ipxe.efi` via TFTP, l'ha eseguito, e iPXE
 ha proseguito da solo scaricando lo script di boot via HTTP — primo
 chainload iPXE riuscito su questo host, catena PXE/TFTP/HTTP boot
 completa e funzionante end-to-end.
+
+## Bug 19 — `echo` con un divisore di trattini interpretato da iPXE come opzione sconosciuta
+
+**Sintomo**: nonostante il bug 18 risolto, `poc-ubuntu-01` continuava a
+rifare da capo l'intera sequenza DHCP -> TFTP -> `boot.ipxe` ogni 1-2
+minuti circa, senza **mai** arrivare a richiedere lo script di dispatch
+per-host (`GET /state/<mac>.ipxe`, mai comparso nel log nginx con lo
+user-agent reale di iPXE) né a postare l'evento `ipxe-start` su
+`/api/log` (mai comparso nella cronologia dello stato). La console
+seriale (`virsh console`) non mostrava assolutamente nulla, nemmeno
+durante un'intera finestra di 45s a cavallo di un reset fresco — non
+un bug, ma una caratteristica di questa build OVMF/iPXE (il testo che
+l'utente aveva visto in precedenza veniva probabilmente dal framebuffer,
+non dalla seriale).
+
+**Diagnosi (visibilità reale, non log indiretti)**: usato
+`virsh screenshot <dominio> file.ppm` (cattura il framebuffer via
+libvirt, nessun client VNC necessario) con una sequenza di scatti a
+3/6/10/15s dopo un reset fresco. Il quarto scatto (10s) mostra l'errore
+letterale sullo schermo:
+
+    ==========...
+    FORGE-AI GitOps provisioning -- environment poc
+    ==========...
+    MAC : 52:54:00:25:00:21
+    IP : 192.168.250.21
+    Platform : efi Arch: x86_64
+    Boot server: http://192.168.250.1:8080
+    Unrecognised option "-----------------------------------------------------------------------------"
+    Usage:
+      echo [-n|--n] [...]
+    See https://ipxe.org/cmd/echo for further information
+    Could not boot image: Invalid argument (https://ipxe.org/1c162282)
+    No more network devices
+
+`ansible/templates/ipxe/boot.ipxe.j2` usa due stili di divisore: righe
+di `=` (che funzionano) e una riga di `-` (`echo
+---------------------------------------------------------------`).
+L'`echo` di iPXE analizza un `-` iniziale come flag di opzione (la sua
+sintassi è `echo [-n|--n] [...]`) — una riga di soli trattini non è un
+flag riconosciuto, l'intero script si interrompe senza alcun fallback
+(nessun `||` su queste `echo` semplici), iPXE segnala "No more network
+devices" e restituisce il controllo al firmware, che esaurisce anche
+l'opzione disco (vuoto) e cade nella UEFI Shell — esattamente lo stato
+in cui la VM era bloccata da ore.
+
+**Correzione applicata**: `ansible/templates/ipxe/boot.ipxe.j2` — il
+divisore di trattini sostituito con lo stesso stile a `=` già usato
+altrove nello script, più un commento che spiega il comportamento di
+`echo` di iPXE per evitare che la stessa svista si ripeta altrove.
+
+**Nota**: nessun'altra occorrenza di `echo` seguito da un divisore a
+trattini trovata negli altri template `.ipxe.j2` del repository
+(verificato con una ricerca mirata, non assunto).
