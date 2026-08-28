@@ -59,7 +59,16 @@ dhcp-option=option:domain-name,{{ deployment.domain }}
 dhcp-option=option:ntp-server,{{ provisioning_network.gateway }}
 {% endif %}
 dhcp-lease-max=253
-dhcp-leasefile={{ storage.state_dir }}/dnsmasq.leases
+# Not storage.state_dir: that directory is 0750, owned by UID 10001 for
+# the state-service container (see libvirt_host's directory-creation
+# task). forge-dnsmasq.service runs as root but with a deliberately
+# narrow CapabilityBoundingSet that excludes CAP_DAC_OVERRIDE, so it
+# gets a plain "Permission denied" there like any other UID would --
+# confirmed via journalctl, not assumed. log_dir is root:root 0755 and
+# already in the unit's ReadWritePaths, so it works without loosening
+# state_dir's permissions for a container that has nothing to do with
+# dnsmasq's own lease file.
+dhcp-leasefile={{ storage.log_dir }}/dnsmasq.leases
 
 # ---------------------------------------------------------------------
 # Static reservations (one per configured host)
