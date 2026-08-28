@@ -166,5 +166,114 @@ segnalare il processo.
 
 **Commit**: `d8acab0`.
 
-**Stato**: risolto, in verifica nel run successivo (esito non ancora
-noto al momento della stesura di questa voce).
+**Stato**: risolto — confermato nel run successivo, lo stage rete è
+passato pulito (probe DHCP concluso in 8.46s, esattamente il timeout
+configurato).
+
+## Bug 6 — `command -v` via il modulo `command` di Ansible: non trova mai nulla
+
+**Sintomo**: risolti i Bug 1-5, arrivati per la prima volta allo
+Stage 5/7 (control plane), fallisce subito:
+`[ERROR] required-commands: not on PATH: virsh, virt-install, qemu-img,
+dnsmasq, docker, curl, jq, sha256sum -- run ./bootstrap/prepare-host.sh`
+— nonostante tutti questi comandi fossero già stati confermati presenti
+da `check-prerequisites.sh` (Fase 4).
+
+**Causa**: `ansible.builtin.command: "command -v {{ item }}"` —
+`command` è un builtin della shell (bash/dash), non un eseguibile
+autonomo; il modulo `command` di Ansible non passa mai per una shell,
+quindi tenta di eseguire un binario `command` che non esiste. Fallisce
+**sempre**, per ogni voce, su qualunque host — non un problema di
+questo ambiente. `failed_when: false` mascherava ogni fallimento
+per-voce come "ok" nell'output del task; solo il controllo successivo
+sul codice di uscita (`rc`) ha fatto emergere il problema reale. Un
+ruolo Ansible-nativo (`prerequisite_validation`) mai esercitato prima
+d'ora — diverso dallo script bash `check-prerequisites.sh` di Fase 4,
+motivo per cui i due controlli hanno dato esiti opposti sugli stessi
+comandi.
+
+**Correzione**: sostituito `command -v {{ item }}` con `which {{ item }}`
+(`which` è un eseguibile reale, verificato presente:
+`/usr/bin/which`).
+
+**Commit**: `be5a934`.
+
+**Stato**: risolto.
+
+## Bug 7 — Due riferimenti a `ansible/templates/` sfuggiti al primo giro (Bug 1)
+
+**Sintomo**: risolto il Bug 6, Stage 5/7 fallisce di nuovo:
+`Could not find or access 'nginx/boot-server.conf.j2'`.
+
+**Causa**: stessa classe del Bug 1, due varianti che la ricerca
+originale (`grep "ansible.builtin.template:" ansible/roles`) non
+copriva:
+1. Un task `ansible.builtin.template` scritto **direttamente in un
+   playbook** (`ansible/playbooks/bootstrap-control-plane.yml`), non
+   dentro un ruolo — la ricerca era scoped solo a `ansible/roles`.
+2. Un `lookup('ansible.builtin.template', 'semaphore/environment.json.j2')`
+   in `ansible/roles/semaphore_config/tasks/repository.yml` — un
+   lookup plugin, non un task `ansible.builtin.template:`, quindi
+   invisibile alla stessa ricerca testuale.
+
+**Correzione**: stesso pattern (`forge_shared_templates_dir`) applicato
+a entrambi. Fatta una ricerca più ampia dopo la correzione (ogni
+riferimento a `.j2` in `ansible/roles` e `ansible/playbooks`,
+indipendentemente dal modulo/meccanismo usato) per confermare che non
+restassero altri casi — nessuno trovato.
+
+**Commit**: `ca28485`.
+
+**Stato**: risolto.
+
+## Bug 8 — Le verifiche di readiness di Gitea/Semaphore puntano alla porta sbagliata
+
+**Sintomo**: risolto il Bug 7, Stage 5/7 (Docker Compose) completa
+finalmente per intero (3m17s) — la prima volta che arriva così lontano.
+Passa allo Stage 6/7 (Gitea e Semaphore) e fallisce:
+`[FAIL] Gitea did not become ready within 180s`.
+
+**Verifica prima di intervenire**: `docker compose ps` mostrava
+`forge-gitea` già "Up 3 minutes (healthy)" — l'healthcheck **interno**
+al container passava, e i log mostravano risposte 200 OK regolari su
+`/api/healthz`. Il servizio funzionava; il controllo di `bootstrap.sh`
+verificava qualcosa d'altro.
+
+**Causa**: `stage_gitops` interroga
+`http://127.0.0.1:{{ control_plane.gitea_http_port }}` (porta 3000) —
+ma quella porta **non è mai pubblicata sull'host**, solo esposta dentro
+la rete Docker interna. `docker compose ps` confermato: nessun mapping
+`127.0.0.1:X->3000`. L'unico punto di accesso reale dall'host è il
+proxy nginx (`compose/nginx/proxy.conf`), che instrada per SNI/Host
+header su un'unica porta TLS (8443) verso `gitea:3000` o
+`semaphore:3000` internamente. `config/defaults.yml` lo dice
+esplicitamente nel commento: "nginx in the compose stack fronts them
+with TLS" — il bug era nell'aver ignorato il proprio commento. Lo
+stesso problema esisteva identico in `create_semaphore_token()`.
+
+**Correzione**: entrambi i controlli di readiness e
+`create_semaphore_token()` ora passano da
+`curl --resolve <hostname>:8443:127.0.0.1 -k https://<hostname>:8443/...`
+— stessa topologia che il riepilogo finale di `bootstrap.sh` già
+suggerisce all'operatore per l'accesso browser, semplicemente mai
+applicata ai controlli interni dello script.
+
+**Verifica diretta prima di committare**: `curl --resolve
+semaphore.poc.local:8443:127.0.0.1 https://semaphore.poc.local:8443/api/ping`
+-> `pong`, riuscito subito. La stessa chiamata per Gitea su
+`/api/v1/version` ha dato **403** — bug distinto (vedi sotto), non lo
+stesso problema di routing (la rete ora funziona, altrimenti sarebbe
+stato "connection refused" come prima, non un 403 con risposta JSON).
+
+**Bug collaterale trovato durante la verifica**: `/api/v1/version` di
+Gitea 1.22.6 richiede un utente autenticato
+(`{"message":"Only signed in user is allowed to call APIs."}`), quindi
+non utilizzabile per un probe di readiness anonimo. Verificato
+`/api/healthz` -> `200` senza autenticazione; usato quello al suo
+posto.
+
+**Commit**: `783ef42`.
+
+**Stato**: risolto, verificato manualmente con `curl` prima del commit
+per entrambi i servizi; da confermare nel prossimo run completo di
+`bootstrap.sh`.
