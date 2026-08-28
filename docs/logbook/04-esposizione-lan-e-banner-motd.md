@@ -88,3 +88,49 @@ di raggiungere l'eseguibile nativo. Risolto con lo stesso prefisso
 Fatto. Le due WebGUI sono ora raggiungibili dalla LAN, `PROXY_BIND_ADDRESS`
 resta un'opzione (default loopback) per chi preferisce il tunnel SSH,
 e il banner di login riflette sempre la configurazione reale.
+
+## Bug 14 — `regex_replace` con backreference a doppio backslash, mai sostituiva nulla
+
+**Contesto**: ripreso `make prepare-media`, fallito di nuovo con
+`Could not determine the expected SHA-256 for
+ubuntu-24.04.3-live-server-amd64.iso` — nonostante il file
+`SHA256SUMS` ufficiale contenesse davvero quella riga (verificato con
+`curl` diretto, sia da Windows sia dalla VM, stesso risultato).
+
+**Diagnosi (mini-playbook di test invece di continuare a ipotizzare)**:
+un playbook Ansible usa-e-getta che riproduce esattamente la stessa
+catena di filtri (`select('search', ...)`, `map('regex_replace', ...)`)
+contro la risposta reale di `SHA256SUMS`, mostra:
+
+    matching lines: ['c3514bf00...  *ubuntu-24.04.3-live-server-amd64.iso']
+    expected=\1 length=2
+
+La riga viene trovata correttamente, ma `regex_replace` con
+sostituzione `'\\1'` (due backslash, dentro un blocco YAML `>-`)
+restituisce la stringa letterale `\1` invece di sostituire il gruppo
+catturato. Cambiato in `'\1'` (un solo backslash) nello stesso
+mini-playbook -> `expected=c3514bf0...` (hash reale, 64 caratteri).
+
+**Correzione applicata**: `ansible/roles/ubuntu_media/tasks/main.yml`,
+`'\\1'` -> `'\1'`.
+
+**Occorrenza simile NON toccata**: `ubuntu_media/defaults/main.yml` ha
+lo stesso pattern testuale (`regex_replace('...', '\\1')`), ma dentro
+una stringa YAML tra doppi apici, non un blocco `>-` — contesto di
+escaping diverso. Non corretta perché il task che ne consuma il
+risultato (`Fetch the official SHA256SUMS`) ha sempre risposto `200`
+in ogni run di stanotte, prova diretta che lì funziona già. Non
+generalizzata la correzione senza una prova specifica per quel punto —
+esattamente il tipo di assunzione che la regola "solo informazioni
+concrete" di `CLAUDE.md` vieta.
+
+**Commit**: `63eb878`.
+
+**Esito finale**: `make prepare-media` -> `EXIT_CODE=0`, verificato:
+
+    Ubuntu ISO verified: c3514bf0056180d09376462a7a1b4f213c1d6e8ea67fae5c25099c6fd3d8274b
+    vmlinuz: 14.3 MB
+    initrd: 70.8 MB
+
+Percorso Windows saltato correttamente (nessuna ISO configurata, per
+design).
