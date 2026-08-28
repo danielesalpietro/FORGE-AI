@@ -196,6 +196,28 @@ create_gitea_token() {
     local admin_user; admin_user=$(sed -n 's/^GITEA_ADMIN_USER=//p' "$FORGE_ROOT/compose/.env" | head -1)
     local token_name="forge-ai-automation"
 
+    # compose/.env.example documents this account as "created by
+    # bootstrap/bootstrap.sh (gitea admin user create)" but nothing
+    # ever actually called it -- GITEA__security__INSTALL_LOCK=true
+    # skips Gitea's own setup wizard, so without this the admin user
+    # simply never exists and every step below fails with
+    # "user does not exist". Idempotent: an existing account is left
+    # alone, matching how the token step below already tolerates
+    # "already exists".
+    local admin_password admin_email create_output
+    admin_password=$(sed -n 's/^GITEA_ADMIN_PASSWORD=//p' "$FORGE_ROOT/compose/.env" | head -1)
+    admin_email=$(sed -n 's/^GITEA_ADMIN_EMAIL=//p' "$FORGE_ROOT/compose/.env" | head -1)
+    if ! create_output=$(docker exec -u git forge-gitea gitea admin user create \
+                    --username "$admin_user" \
+                    --password "$admin_password" \
+                    --email "$admin_email" \
+                    --admin --must-change-password=false 2>&1); then
+        if ! printf '%s' "$create_output" | grep -qi "already exists"; then
+            log_err "could not create the Gitea admin user: $create_output" >&2
+            return 1
+        fi
+    fi
+
     # Gitea's CLI can mint a scoped token without an interactive login,
     # which avoids putting the admin password on a command line.
     local output
