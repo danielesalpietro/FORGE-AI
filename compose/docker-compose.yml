@@ -118,8 +118,13 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     ports:
-      # SSH for git push/pull. HTTP is reached through the proxy only.
+      # SSH for git push/pull. Browser/LAN HTTP is reached through the
+      # proxy only -- this second line is loopback-only, for this
+      # stack's own Ansible automation (gitea_config role, which talks
+      # to gitea_api_url straight over HTTP instead of the TLS proxy).
+      # It does not change what is reachable from the LAN.
       - "${BIND_ADDRESS:-127.0.0.1}:${GITEA_SSH_PORT:-2222}:2222"
+      - "127.0.0.1:${GITEA_HTTP_PORT:-3000}:3000"
     networks:
       backend: {aliases: [gitea]}
     healthcheck:
@@ -170,6 +175,11 @@ services:
       # checksums and state without a writable mount.
       - ${FORGE_ARTIFACTS_DIR:-/srv/forge-ai}/state:/srv/forge-ai/state:ro
       - ${FORGE_ARTIFACTS_DIR:-/srv/forge-ai}/reports:/srv/forge-ai/reports:rw
+    ports:
+      # Loopback-only, for this stack's own Ansible automation
+      # (semaphore_config role, semaphore_api_url) -- browser/LAN access
+      # still goes only through the TLS proxy.
+      - "127.0.0.1:${SEMAPHORE_HTTP_PORT:-3001}:3000"
     networks:
       backend: {aliases: [semaphore]}
     healthcheck:
