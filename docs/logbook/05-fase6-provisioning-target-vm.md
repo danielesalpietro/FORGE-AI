@@ -137,5 +137,29 @@ teneva occupate le porte 67/69 fuori dal controllo di systemd
 test successivo. Terminato manualmente con `kill -9`. Non un bug del
 repo, un artefatto della sessione di debug.
 
-**Commit**: TBD (vedi commit immediatamente successivo a questa voce di
-log).
+**Commit**: `643c30d`.
+
+**Verifica finale tramite la pipeline reale** (non solo il test manuale
+sull'host): pull del fix, `make lint` -> `EXIT_CODE=0` (146 file,
+profilo `production`, nessun errore/warning proprio — solo i soliti due
+warning attesi su `vault.yml` non decifrabile in questo contesto), poi
+`make deploy-pxe` -> `EXIT_CODE=0`:
+
+    ==========================================================
+     PXE services ready
+    ==========================================================
+     DHCP/DNS/TFTP : forge-dnsmasq on virbr-forge
+     Boot server   : http://192.168.250.1:8080
+     Entry point   : http://192.168.250.1:8080/boot/boot.ipxe
+
+     Per-host dispatch (what each MAC will receive on its next boot):
+       poc-ubuntu-01    http://192.168.250.1:8080/state/52-54-00-25-00-21.ipxe
+       poc-windows-01   http://192.168.250.1:8080/state/52-54-00-25-00-22.ipxe
+
+    PLAY RECAP: ok=38  changed=3  failed=0  skipped=8
+
+**Nota**: `make lint` sull'host richiede l'attivazione esplicita di
+`.venv` (`. .venv/bin/activate`) — senza, `yamllint` non è sul `PATH` e
+il target fallisce con `Error 127`. Non un bug: l'ambiente venv esiste
+già (creato da `bootstrap.sh`), semplicemente non attivo per default in
+una nuova sessione SSH non interattiva.
