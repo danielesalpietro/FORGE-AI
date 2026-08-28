@@ -25,9 +25,14 @@
     <firmware>
       <!-- Secure Boot is off for the PoC: the iPXE binaries and the
            Ubuntu kernel chain are not signed by a key in the default
-           OVMF db. docs/SECURITY.md, "unsigned boot components". -->
+           OVMF db. docs/SECURITY.md, "unsigned boot components".
+           enrolled-keys (pre-enrolling the default Microsoft keys) is
+           only meaningful together with secure-boot itself -- libvirt
+           rejects enrolled-keys=yes with secure-boot=no outright
+           ("firmware feature 'enrolled-keys' cannot be enabled when
+           firmware feature 'secure-boot' is disabled"), so it is left
+           unset here rather than contradicting the line above it. -->
       <feature enabled="no" name="secure-boot"/>
-      <feature enabled="yes" name="enrolled-keys"/>
     </firmware>
 {% endif %}
 {% for device in (['network', 'hd'] if forge_boot_target | default('network') == 'network' else ['hd', 'network']) %}
