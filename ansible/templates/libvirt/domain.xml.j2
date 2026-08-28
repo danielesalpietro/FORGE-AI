@@ -33,6 +33,15 @@
       <feature enabled="no" name="secure-boot"/>
     </firmware>
 {% endif %}
+    <!-- This os/boot list is what set-boot-order.yml re-renders and
+         redefines to flip forge_boot_target from network to hd once a
+         host reports "installed"; it greps the redefined domain XML
+         for this exact <boot dev='...'/> pattern to confirm the switch
+         took effect. Per-device <boot order="N"/> elements on the disk
+         and interface below would express the same ordering, but
+         libvirt rejects the two mechanisms combined outright
+         ("per-device boot elements cannot be used together with
+         os/boot elements"), so only this one is used. -->
 {% for device in (['network', 'hd'] if forge_boot_target | default('network') == 'network' else ['hd', 'network']) %}
     <boot dev="{{ device }}"/>
 {% endfor %}
@@ -87,7 +96,6 @@
       <driver name="qemu" type="qcow2" cache="none" io="native" discard="unmap"/>
       <source file="{{ storage.libvirt_pool_path }}/{{ host.name }}.qcow2"/>
       <target dev="{{ 'vda' if host.disk_bus | default('virtio') == 'virtio' else 'sda' }}" bus="{{ host.disk_bus | default('virtio') }}"/>
-      <boot order="2"/>
     </disk>
 
 {% if host.os_family == 'windows' and windows_attach_virtio_cdrom | default(false) %}
@@ -113,7 +121,6 @@
       <mac address="{{ host.mac_address }}"/>
       <source network="{{ provisioning_network.name }}"/>
       <model type="{{ host.network_model | default('virtio') }}"/>
-      <boot order="1"/>
     </interface>
 
     <!-- Serial console: the only way to watch a headless Subiquity run
