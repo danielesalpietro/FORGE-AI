@@ -27,11 +27,9 @@
            Ubuntu kernel chain are not signed by a key in the default
            OVMF db. docs/SECURITY.md, "unsigned boot components".
            enrolled-keys (pre-enrolling the default Microsoft keys) is
-           only meaningful together with secure-boot itself -- libvirt
-           rejects enrolled-keys=yes with secure-boot=no outright
-           ("firmware feature 'enrolled-keys' cannot be enabled when
-           firmware feature 'secure-boot' is disabled"), so it is left
-           unset here rather than contradicting the line above it. -->
+           only meaningful together with secure-boot itself, so libvirt
+           rejects enrolled-keys=yes with secure-boot=no outright: it
+           is left unset here rather than contradicting the line below. -->
       <feature enabled="no" name="secure-boot"/>
     </firmware>
 {% endif %}
