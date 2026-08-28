@@ -173,7 +173,12 @@
 # Tooling
 # ---------------------------------------------------------------------
 - name: Look for the required commands
-  ansible.builtin.command: "command -v {{ item }}"
+  # `command -v` is a shell builtin, not a standalone executable -- the
+  # command module never goes through a shell, so this always failed
+  # (rc != 0) for every item, on every host. failed_when: false hid it
+  # as "ok" per-item; only the downstream rc check surfaced the real
+  # failure. `which` is a real binary, so this actually works.
+  ansible.builtin.command: "which {{ item }}"
   changed_when: false
   failed_when: false
   register: forge_prereq_commands
