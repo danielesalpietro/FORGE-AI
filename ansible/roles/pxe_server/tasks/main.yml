@@ -57,7 +57,7 @@
 
 - name: Render the dnsmasq configuration
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../templates/dnsmasq/provisioning.conf.j2"
+    src: "{{ forge_shared_templates_dir }}/dnsmasq/provisioning.conf.j2"
     dest: "{{ forge_dnsmasq_config }}"
     owner: root
     group: root
@@ -73,7 +73,7 @@
 
 - name: Install the systemd unit for the FORGE-AI dnsmasq instance
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../templates/dnsmasq/forge-dnsmasq.service.j2"
+    src: "{{ forge_shared_templates_dir }}/dnsmasq/forge-dnsmasq.service.j2"
     dest: "/etc/systemd/system/{{ pxe_dnsmasq_unit }}.service"
     owner: root
     group: root

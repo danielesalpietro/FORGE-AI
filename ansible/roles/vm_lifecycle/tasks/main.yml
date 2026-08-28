@@ -114,7 +114,7 @@
 # ---------------------------------------------------------------------
 - name: Render the domain XML
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../templates/libvirt/domain.xml.j2"
+    src: "{{ forge_shared_templates_dir }}/libvirt/domain.xml.j2"
     dest: "{{ storage.artifacts_dir }}/config/{{ item.name }}.xml"
     owner: root
     group: root

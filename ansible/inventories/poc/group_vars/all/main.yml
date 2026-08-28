@@ -9,6 +9,18 @@
 # =====================================================================
 
 # ---------------------------------------------------------------------
+# Shared templates
+# ---------------------------------------------------------------------
+# Every playbook here lives in ansible/playbooks/, so `playbook_dir` is
+# always that directory -- `dirname` walks up one level to `ansible/`,
+# landing on the single templates/ tree every role's `template` tasks
+# render from (only ubuntu_baseline keeps its own role-local copies).
+# Roles cannot see this via a bare role-relative `src:` on their own;
+# ansible-lint's no-relative-paths rule also forbids spelling it with a
+# literal `..` in the task file, so it is resolved once, here, instead.
+forge_shared_templates_dir: "{{ playbook_dir | dirname }}/templates"
+
+# ---------------------------------------------------------------------
 # Run identity -- stamped into every rendered artefact and report.
 # ---------------------------------------------------------------------
 # Overridden per run by site.yml, or from Semaphore via the task

@@ -155,7 +155,7 @@
 
 - name: Write the human-readable report
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../templates/report/deployment-report.md.j2"
+    src: "{{ forge_shared_templates_dir }}/report/deployment-report.md.j2"
     dest: "{{ reporting_dir }}/deployment-{{ forge_deployment_id }}.md"
     owner: root
     group: root
@@ -166,7 +166,7 @@
 
 - name: Write the HTML report
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../templates/report/deployment-report.html.j2"
+    src: "{{ forge_shared_templates_dir }}/report/deployment-report.html.j2"
     dest: "{{ reporting_dir }}/deployment-{{ forge_deployment_id }}.html"
     owner: root
     group: root

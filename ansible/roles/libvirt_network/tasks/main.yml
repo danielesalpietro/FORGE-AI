@@ -24,7 +24,7 @@
 
 - name: Render the provisioning network XML
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../templates/libvirt/network.xml.j2"
+    src: "{{ forge_shared_templates_dir }}/libvirt/network.xml.j2"
     dest: "{{ storage.artifacts_dir }}/config/{{ provisioning_network.name }}.xml"
     owner: root
     group: root
