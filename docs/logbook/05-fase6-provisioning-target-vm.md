@@ -287,3 +287,43 @@ altrove nello script, più un commento che spiega il comportamento di
 **Nota**: nessun'altra occorrenza di `echo` seguito da un divisore a
 trattini trovata negli altri template `.ipxe.j2` del repository
 (verificato con una ricerca mirata, non assunto).
+
+## Bug 20 — `params`/`param`/`##params` non supportati da questo build di iPXE
+
+**Sintomo**: dopo il bug 19, il divisore ora funziona e lo script arriva
+a stampare il banner (confermato via screenshot), ma si interrompe
+subito dopo con un nuovo errore letterale sullo schermo:
+
+    params: command not found
+    Could not boot image: Exec format error (https://ipxe.org/2e022081)
+    No more network devices
+
+**Diagnosi**: `boot.ipxe.j2` usava `params` / `param mac ...` / `param
+event ...` seguiti da `imgfetch --name ipxe-start ${log-url}##params`
+per notificare il servizio di stato che iPXE è partito. Questo build
+Ubuntu di iPXE (`1.21.1+git-20220113.fbbdc3926-0ubuntu2`, lo stesso
+usato per `ipxe.efi`/`undionly.kpxe`) **non include affatto** la
+feature "forms POST" (`params`/`param`/`##params`) — non un errore di
+sintassi, il comando `params` stesso non esiste in questo binario.
+
+Verificato **prima di correggere** (non assunto) leggendo l'handler
+reale lato server in `compose/state-service/app.py`, funzione
+`do_GET`:
+
+    # iPXE reports progress with GET because imgfetch cannot POST.
+    if path == "/api/log":
+        LOG.info("ipxe event: %s", urlparse(self.path).query or "(no query)")
+        self._send(HTTPStatus.OK, b"#!ipxe\nexit 0\n")
+        return
+
+Il servizio si aspetta **già** una GET con query string — il commento
+nel codice lo dice esplicitamente. `params`/`##params` non era mai il
+meccanismo giusto per raggiungerlo su questo build; una GET con
+query string costruita a mano è esattamente quello che il server
+prevede.
+
+**Correzione applicata**: `ansible/templates/ipxe/boot.ipxe.j2` — il
+blocco `params`/`param`/`imgfetch ##params` sostituito con un singolo
+`imgfetch` la cui URL include la query string costruita direttamente
+(`${log-url}?mac=${net0/mac}&event=ipxe-start&platform=${platform}&arch=${buildarch}`),
+senza usare `params`/`param` in alcuna forma.

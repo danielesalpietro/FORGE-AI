@@ -35,12 +35,13 @@ echo
 
 # Report that this client reached iPXE. Failure is non-fatal: the boot
 # must proceed even when the state service is down.
-params
-param mac ${net0/mac}
-param event ipxe-start
-param platform ${platform}
-param arch ${buildarch}
-imgfetch --name ipxe-start ${log-url}##params || echo [warn] state service unreachable, continuing
+#
+# Built as a plain query string, not params/param/##params: this
+# distro-packaged iPXE build (1.21.1+git-20220113.fbbdc3926-0ubuntu2)
+# does not include the forms-POST feature at all -- "params: command
+# not found" on real hardware, confirmed via `virsh screenshot`, which
+# aborted the script exactly like the dash-divider bug (bug 19) did.
+imgfetch --name ipxe-start "${log-url}?mac=${net0/mac}&event=ipxe-start&platform=${platform}&arch=${buildarch}" || echo [warn] state service unreachable, continuing
 imgfree ipxe-start || goto after_log
 :after_log
 
