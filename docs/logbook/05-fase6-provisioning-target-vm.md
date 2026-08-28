@@ -327,3 +327,29 @@ blocco `params`/`param`/`imgfetch ##params` sostituito con un singolo
 `imgfetch` la cui URL include la query string costruita direttamente
 (`${log-url}?mac=${net0/mac}&event=ipxe-start&platform=${platform}&arch=${buildarch}`),
 senza usare `params`/`param` in alcuna forma.
+
+**Verifica e traguardo raggiunto**: dopo il fix, `virsh screenshot`
+mostra la sequenza completa riuscire per la prima volta:
+
+    Requesting provisioning state: http://192.168.250.1:8080/state/52-54-00-25-00-21.ipxe ... ok
+    [state] poc-ubuntu-01: state=installing attempt=2/3
+    [state] chaining the ubuntu-server installer
+    http://192.168.250.1:8080/boot/host-52-54-00-25-00-21-install.ipxe ... ok
+    http://192.168.250.1:8080/ubuntu/casper/vmlinuz ... ok
+    http://192.168.250.1:8080/ubuntu/casper/initrd ... ok
+    EFI stub: Loaded initrd from command line option
+
+seguito da un secondo screenshot che mostra il **kernel Linux reale in
+boot** (dmesg: driver SATA/USB/virtio-gpu, VLAN, RAID6...) — prima
+riuscita end-to-end dell'intera catena DHCP -> TFTP -> iPXE -> kernel
+-> Linux su questo host.
+
+**Problema minore rimasto, non bloccante**: l'`imgfetch` del solo
+evento di log `ipxe-start` fallisce ancora (`Could not start download:
+Operation not supported`), gestito correttamente dal fallback `||
+echo [warn] ... continuing` già presente nello script — non impedisce
+il proseguimento del boot. Non approfondito ulteriormente: cosmetico
+(perdita di un singolo evento di telemetria), non blocca
+l'installazione. Da rivisitare se si vuole una telemetria completa.
+
+**Commit**: `4117d49`.
