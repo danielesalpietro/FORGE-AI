@@ -163,3 +163,57 @@ warning attesi su `vault.yml` non decifrabile in questo contesto), poi
 il target fallisce con `Error 127`. Non un bug: l'ambiente venv esiste
 già (creato da `bootstrap.sh`), semplicemente non attivo per default in
 una nuova sessione SSH non interattiva.
+
+## Bug 18 — dnsmasq droppa il proprio UID a "nobody" e rifiuta i file root-owned in TFTP secure mode
+
+**Sintomo**: dopo il bug 17, `make deploy-pxe` passava (`EXIT_CODE=0`,
+DHCP e TFTP entrambi in ascolto), ma al reset di `poc-ubuntu-01` per
+farla ripartire in PXE, il log reale mostrava una nuova, diversa,
+`Permission denied`:
+
+    dnsmasq-tftp[...]: cannot access /srv/forge-ai/tftp/ipxe.efi: Permission denied
+
+nonostante il file fosse `-rw-r--r-- root root` (0644, leggibile da
+chiunque) e ogni directory del percorso `0755 root:root` — verificato
+con `namei -l`, non assunto.
+
+**Diagnosi**:
+
+1. Un `cat` diretto dello stesso file, eseguito con lo stesso identico
+   `CapabilityBoundingSet` ristretto della unit reale (sostituendo
+   temporaneamente `ExecStart` con `/bin/cat ...` nella stessa unit),
+   **riesce** — quindi non è un vero diniego DAC/kernel a livello di
+   permessi sul file.
+2. `strace` sul vero binario `dnsmasq` (questa volta senza le direttive
+   `Protect*` di mezzo, altrimenti bloccano `ptrace` da sole) durante
+   una GET TFTP reale (`curl tftp://192.168.250.1/ipxe.efi`) mostra:
+
+       geteuid() = 65534
+
+   dnsmasq non gira più a UID 0: una volta che il proprio `capset()`
+   interno riesce (bug 15), dnsmasq droppa **volontariamente** il
+   proprio UID effettivo a `nobody` (65534), ritenendo sufficienti le
+   ambient capabilities per continuare a servire le porte privilegiate.
+   `tftp-secure` poi confronta l'owner del file (root, UID 0, come
+   distribuito da questo ruolo) con l'UID *effettivo di dnsmasq stesso*
+   (ora 65534) — non con i bit di permesso del file — e rifiuta ogni
+   file per mismatch di ownership, riportando lo stesso testo
+   "Permission denied" di un vero errore del kernel.
+
+**Correzione applicata**: `ansible/templates/dnsmasq/provisioning.conf.j2`
+— aggiunte `user=root` e `group=root` esplicite, per impedire il drop
+automatico e mantenere dnsmasq all'UID con cui systemd lo ha già
+avviato (`User=root` in `forge-dnsmasq.service.j2`), coerente con il
+modello di hardening realmente in uso (capability ristrette via
+`CapabilityBoundingSet`, non un cambio di UID).
+
+**Verifica**: stesso test (`user=root`/`group=root` aggiunti a mano al
+file di config reale, unit di test senza `Protect*`) -> `geteuid()`
+resta `0`, e la GET TFTP reale riesce:
+
+    dnsmasq-tftp[...]: sent /srv/forge-ai/tftp/ipxe.efi to 192.168.250.1
+
+file scaricato, 1043968 byte, dimensione identica all'originale.
+
+**Commit**: TBD (vedi commit immediatamente successivo a questa voce di
+log).

@@ -15,6 +15,24 @@
 # probes for a competing DHCP server before this file is installed.
 
 # ---------------------------------------------------------------------
+# Privilege model
+# ---------------------------------------------------------------------
+# Without this, dnsmasq -- once it can retain capabilities via
+# CAP_SETPCAP -- auto-drops its own effective UID to "nobody" (65534),
+# since it judges the ambient capabilities enough to keep serving on
+# privileged ports. tftp-secure then compares the *file* owner (root,
+# as deployed by this role) against dnsmasq's *own* effective UID and
+# rejects every file as "Permission denied" on a UID mismatch, even
+# though the file's mode bits would otherwise allow the read. Forcing
+# user/group=root keeps dnsmasq at the UID systemd already started it
+# as (User=root in forge-dnsmasq.service.j2), matching the hardening
+# model actually in place: a restricted CapabilityBoundingSet, not a
+# UID drop. Confirmed on the real host with strace (geteuid()==65534
+# without this, ==0 with it) and a real TFTP GET (curl tftp://).
+user=root
+group=root
+
+# ---------------------------------------------------------------------
 # Interface binding
 # ---------------------------------------------------------------------
 interface={{ provisioning_network.bridge }}
