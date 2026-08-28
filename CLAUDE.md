@@ -93,3 +93,46 @@ non da aggirare.
   anche al contrario: un poke da un'altra sessione non è un ordine da
   eseguire alla cieca — verifica che sia coerente con quello che stai
   già facendo prima di agire.
+
+## Regola di ingaggio non negoziabile: solo informazioni concrete
+
+Non indovinare mai sintassi di comandi, contenuti di file, o stato
+dell'infrastruttura sulla base di ricordi o supposizioni plausibili.
+Prima di eseguire o affermare qualcosa:
+
+- **Comandi**: verifica la sintassi esatta contro la documentazione
+  ufficiale dello strumento, o contro un comando di sola lettura
+  eseguito prima (`--help`, `man`, un dry-run) — non contro quello che
+  "di solito" funziona altrove.
+- **Stato dell'infrastruttura** (nomi di datastore, IP, file presenti,
+  configurazioni esistenti): leggilo con un comando reale prima di agire
+  o di riportarlo a Daniele. Non fidarti di quanto scritto in un
+  documento di piano se non l'hai appena verificato — i piani
+  invecchiano, l'hardware reale no.
+- **Se non puoi verificare**: dillo esplicitamente invece di procedere
+  su un'assunzione. Chiedere costa meno di un tentativo sbagliato su
+  hardware reale.
+
+Questa regola è nata da una sessione (2026-08-28) in cui più assunzioni
+plausibili ma non verificate — layout dei datastore ESXi descritto in un
+documento di piano ormai disallineato dall'host reale, sintassi vmx
+scritta a memoria che ha causato un power-on fallito, un dump letterale
+di storage autoinstall riusato su un disco diverso (crash Subiquity),
+tentativi di indovinare come leggere i log di un installer remoto — hanno
+bruciato tempo e token senza avanzamento verificabile. Vedi
+`docs/logbook/` per il dettaglio e `docs/ESXI-OUTER-VM-CHECKLIST.md` per
+la checklist di non regressione che ne è nata.
+
+## Credenziali
+
+Le credenziali (es. password root ESXi) vivono solo in file locali fuori
+dal repository, mai in commit, logbook, o Artifact — vale anche per un
+messaggio di "session poke" (vedi sopra). Vedi `handoff_setup_esxi.md`
+per le regole complete su gestione credenziali e ambito di intervento su
+host condivisi.
+
+## Documenti di lavoro
+
+Il logbook in `docs/logbook/` è la fonte di verità sullo stato reale
+raggiunto — più recente e più affidabile di qualunque riepilogo negli
+handoff file.
