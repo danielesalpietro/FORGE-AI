@@ -765,7 +765,10 @@ strumento locale per non bloccare la conversazione)**:
       "cd FORGE-AI && sudo -S make install-host DOCKER=1" > install-host.log 2>&1
 
 **Osservato** (log completo salvato come artefatto reale in
-`docs/logbook/artifacts/install-host-forge-poc-host-2.log`, verificato
+`docs/logbook/raw-logs/install-host-forge-poc-host-2.log` — nota:
+inizialmente salvato sotto `artifacts/`, nome che combacia in silenzio
+con una regola `.gitignore` del progetto per output di build e quindi
+non veniva tracciato; rinominato in `raw-logs/` — verificato
 prima senza occorrenze di segreti oltre al prompt `[sudo] password
 for...` senza valore):
 
