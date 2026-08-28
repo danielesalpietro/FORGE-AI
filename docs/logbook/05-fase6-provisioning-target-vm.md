@@ -417,3 +417,70 @@ raggiunto per la prima volta la dimensione **completa**:
 
 (prima si fermava sempre e solo a 1918705422 byte con 4096 MB). Bug 21
 confermato risolto.
+
+## Stallo non ancora diagnosticato — `run_unattended_upgrades` (attempt 2)
+
+Dopo il fix del bug 21, l'installazione Subiquity è proseguita
+correttamente e per la prima volta molto a fondo: partizionamento LVM
+completo (ESP/boot/vg0/lv-root), estrazione dell'immagine, curthooks
+(bootloader GRUB, kernel, initramfs), e quasi tutti i pacchetti
+postinstall (`qemu-guest-agent`, `python3`, `python3-apt`, `curl`,
+`jq`, `chrony`, `ufw`, `auditd`, `unattended-upgrades`,
+`openssh-server`, `cloud-init`) — installati con successo, verificato
+via `virsh screenshot` a più riprese.
+
+Si è però fermata sulla riga `subiquity/Install/install/postinstall/
+run_unattended_upgrades: downloading and installing security updates`
+per oltre 30 minuti, senza mai avanzare.
+
+**Diagnosi condotta (parziale, non conclusiva)**:
+- `virsh domstats poc-ubuntu-01 --cpu-total`, ripetuto molte volte nel
+  corso dei 30+ minuti: per la maggior parte del tempo la CPU
+  risultava **attiva** (spesso vicino o sopra il 100%, coerente con
+  `dpkg`/hook post-download), quindi non trattato come stallo finché
+  è rimasta tale.
+- `virsh domifstat poc-ubuntu-01 vnet1`, controllato quando la
+  schermata era ferma da tempo: `tx_bytes` **identico** su letture
+  consecutive a distanza di secondi — nessun traffico di rete in
+  uscita, il download è quindi già concluso.
+- Tentata una connessione SSH diretta al target (`ssh -i
+  ~/.ssh/forge-ai-poc forgeops@192.168.250.21`, chiave trovata al
+  path atteso da `ansible/inventories/poc/group_vars/all/
+  vault.example.yml`, `vault_ssh_private_key_path`) per avere
+  visibilità reale invece di continuare a leggere screenshot: **va in
+  timeout**, non "connection refused" — la porta non accetta nuove
+  connessioni. `ping` verso lo stesso IP **funziona** regolarmente
+  (~13ms, 0% loss), quindi lo stack di rete di base del kernel
+  risponde ancora.
+- Verificato che i late-commands dell'autoinstall **non** contengono
+  alcun `ufw enable`/`ufw allow` — `ufw` è solo installato come
+  pacchetto, scartata l'ipotesi che un firewall attivo stia bloccando
+  la porta 22.
+- Controllo CPU finale (5 letture consecutive a 2s di distanza): per
+  la prima volta **piatto** (~6-7%, contro il ~100%+ di ogni
+  controllo precedente) — una transizione reale da "attivo" a
+  "fermo", non una lettura isolata.
+
+**Grado di certezza**: la causa esatta **non è stata confermata**.
+Ipotesi plausibile ma non verificata: `needrestart` (pacchetto
+presente di default su Ubuntu 24.04) può presentare un prompt
+interattivo per la scelta dei servizi da riavviare dopo
+l'aggiornamento di librerie di sistema, e se la modalità non
+interattiva non è propagata correttamente a questo invocazione di
+`unattended-upgrades` dentro `curtin in-target`, l'intero processo
+potrebbe restare in attesa di un input che non arriverà mai. Non
+verificato con evidenza diretta (nessun accesso shell riuscito al
+target) — riportato come ipotesi, non come fatto accertato, per non
+violare la regola "solo informazioni concrete" di `CLAUDE.md`.
+
+**Azione**: dato lo stallo confermato (non solo apparente) e la
+porta SSH irraggiungibile, reset della VM per consumare il terzo e
+ultimo tentativo installazione disponibile (`MAX_ATTEMPTS=3`,
+confermato leggendo `compose/state-service/app.py`: poiché lo stato
+resta `installing` con `attempts=2`, un nuovo dispatch da iPXE
+incrementa a `attempts=3` senza bisogno di un reset esplicito dello
+stato). Se anche il terzo tentativo si ferma nello stesso punto, sarà
+un pattern ripetibile che giustificherà un'indagine più approfondita
+(es. recuperare `/var/log/installer/` dal target una volta accessibile,
+o disabilitare `unattended-upgrades` dai late-commands come
+mitigazione).
