@@ -247,8 +247,11 @@ create_semaphore_token() {
     # raw port is not published on the host, only the TLS proxy is.
     local https_port; https_port=$(forge_config '.control_plane.proxy_https_port')
     local semaphore_host; semaphore_host=$(forge_config '.control_plane.semaphore_hostname')
+    local proxy_addr
+    proxy_addr=$(sed -n 's/^PROXY_BIND_ADDRESS=//p' "$FORGE_ROOT/compose/.env" | head -1)
+    [[ -n "$proxy_addr" ]] || proxy_addr="127.0.0.1"
     api="https://${semaphore_host}:${https_port}/api"
-    resolve="${semaphore_host}:${https_port}:127.0.0.1"
+    resolve="${semaphore_host}:${https_port}:${proxy_addr}"
     admin_user=$(sed -n 's/^SEMAPHORE_ADMIN_USER=//p' "$FORGE_ROOT/compose/.env" | head -1)
     admin_password=$(sed -n 's/^SEMAPHORE_ADMIN_PASSWORD=//p' "$FORGE_ROOT/compose/.env" | head -1)
     jar=$(mktemp); chmod 0600 "$jar"
@@ -315,13 +318,20 @@ stage_gitops() {
     local https_port; https_port=$(forge_config '.control_plane.proxy_https_port')
     local gitea_host; gitea_host=$(forge_config '.control_plane.gitea_hostname')
     local semaphore_host; semaphore_host=$(forge_config '.control_plane.semaphore_hostname')
+    # Where the proxy container's ports actually landed -- PROXY_BIND_ADDRESS
+    # (efbee19) may have moved them off loopback onto the LAN. --resolve
+    # must point at whichever address docker compose actually published,
+    # not always 127.0.0.1.
+    local proxy_addr
+    proxy_addr=$(sed -n 's/^PROXY_BIND_ADDRESS=//p' "$FORGE_ROOT/compose/.env" | head -1)
+    [[ -n "$proxy_addr" ]] || proxy_addr="127.0.0.1"
 
     log "waiting for Gitea"
     local waited=0
     # /api/v1/version requires a signed-in user on this Gitea version
     # ("Only signed in user is allowed to call APIs", 403) -- /api/healthz
     # is the unauthenticated readiness endpoint.
-    until curl -fsSk --resolve "${gitea_host}:${https_port}:127.0.0.1" \
+    until curl -fsSk --resolve "${gitea_host}:${https_port}:${proxy_addr}" \
             "https://${gitea_host}:${https_port}/api/healthz" >/dev/null 2>&1; do
         (( waited >= 180 )) && die "Gitea did not become ready within 180s (docker compose logs gitea)"
         sleep 5; waited=$((waited + 5))
@@ -330,7 +340,7 @@ stage_gitops() {
 
     log "waiting for Semaphore"
     waited=0
-    until curl -fsSk --resolve "${semaphore_host}:${https_port}:127.0.0.1" \
+    until curl -fsSk --resolve "${semaphore_host}:${https_port}:${proxy_addr}" \
             "https://${semaphore_host}:${https_port}/api/ping" >/dev/null 2>&1; do
         (( waited >= 180 )) && die "Semaphore did not become ready within 180s (docker compose logs semaphore)"
         sleep 5; waited=$((waited + 5))
