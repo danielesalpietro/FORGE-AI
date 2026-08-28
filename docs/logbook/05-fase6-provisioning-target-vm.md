@@ -399,3 +399,21 @@ ripetere lo stesso problema a chi clona il repo). `vm_lifecycle`'s
 caso (un cambio di `memory_mb` che deve raggiungere un dominio libvirt
 già esistente) — nessuna modifica di codice necessaria, solo al
 config.
+
+**Nota operativa**: `virsh define` (quello che usa `vm_lifecycle`)
+aggiorna solo la definizione **persistente** del dominio — un dominio
+già in esecuzione continua con la RAM del processo QEMU originale
+finché non viene fermato e riavviato per intero. Confermato con
+`virsh dumpxml` (senza `--inactive`, mostra la config live) ancora a
+4194304 KiB dopo il `define`, mentre `--inactive` mostrava già
+8388608 KiB. Serve un vero power-cycle (`virsh destroy` +
+`virsh start`), non un `virsh reset` (che riavvia la CPU ma non
+rilancia il processo QEMU con i nuovi argomenti `-m`).
+
+**Verifica finale**: dopo `destroy`+`start`, il download dell'ISO ha
+raggiunto per la prima volta la dimensione **completa**:
+
+    GET /iso/ubuntu-24.04.3-live-server-amd64.iso HTTP/1.1" 200 3303444480 "-" "Wget"
+
+(prima si fermava sempre e solo a 1918705422 byte con 4096 MB). Bug 21
+confermato risolto.
