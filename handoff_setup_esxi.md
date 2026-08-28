@@ -246,6 +246,27 @@ Ubuntu Server 24.04 da ISO ufficiale: sistema completo, non minimized,
 con OpenSSH server selezionato durante l'installazione, nessuno snap in
 evidenza — in particolare non lo snap `docker`.
 
+**Non remasterizzare la ISO.** Non serve costruire un'immagine
+personalizzata: hai accesso alla console remota della VM tramite il
+client ESXi/vCenter, esattamente come un operatore umano. Due strade,
+entrambe senza toccare l'immagine ufficiale:
+
+- **Interattiva** — apri la console della VM e rispondi ai passi
+  dell'installer una volta, come un'installazione normale. Per una
+  singola VM è la via più rapida.
+- **Non presidiata, senza remaster** — Ubuntu Server supporta
+  l'autoinstall passando `autoinstall ds=nocloud-net;s=http://<ip>:<porta>/`
+  come parametro al kernel dalla schermata di boot della ISO (premi `e`
+  sulla voce di avvio per modificarla), con un seed NoCloud
+  (`user-data`/`meta-data`) servito via HTTP da una macchina qualunque
+  raggiungibile dalla VM durante l'installazione. È la stessa tecnica
+  che questo stesso PoC usa già per i target interni via PXE
+  (`ds=nocloud;s=http://.../<host>/` — vedi `ansible/templates/`), quindi
+  resta coerente con il resto del progetto invece di introdurne una
+  nuova. Il remaster dell'ISO (come fa `kickstart-berlin` per il
+  bare-metal, dove non c'è nessuna console interattiva disponibile) è
+  uno strumento per un problema diverso da questo.
+
 Apri il primo logbook con l'esito di:
 
 ```bash
