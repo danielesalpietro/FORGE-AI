@@ -215,5 +215,21 @@ resta `0`, e la GET TFTP reale riesce:
 
 file scaricato, 1043968 byte, dimensione identica all'originale.
 
-**Commit**: TBD (vedi commit immediatamente successivo a questa voce di
-log).
+**Commit**: `ad66502`.
+
+**Verifica finale tramite la pipeline reale e un boot vero**: `git
+pull` sull'host, `make lint` -> `EXIT_CODE=0`, `make deploy-pxe` ->
+`EXIT_CODE=0`, poi `virsh reset poc-ubuntu-01` per far ripartire la VM
+da firmware. Log reale di dnsmasq:
+
+    dnsmasq-tftp[...]: sent /srv/forge-ai/tftp/ipxe.efi to 192.168.250.21
+    dnsmasq-tftp[...]: sent /srv/forge-ai/tftp/ipxe.efi to 192.168.250.21
+
+e subito dopo, nel log di nginx (`boot-access.log`):
+
+    GET /boot/boot.ipxe HTTP/1.1" 200 2923 "-" "iPXE/1.21.1+git-20220113.fbbdc3926-0ubuntu2"
+
+Il firmware PXE ha scaricato `ipxe.efi` via TFTP, l'ha eseguito, e iPXE
+ha proseguito da solo scaricando lo script di boot via HTTP — primo
+chainload iPXE riuscito su questo host, catena PXE/TFTP/HTTP boot
+completa e funzionante end-to-end.
