@@ -220,16 +220,20 @@ create_gitea_token() {
 }
 
 create_semaphore_token() {
-    local api port admin_user admin_password jar
-    port=$(forge_config '.control_plane.semaphore_http_port')
-    api="http://127.0.0.1:${port}/api"
+    local api resolve admin_user admin_password jar
+    # Same proxy topology as stage_gitops's readiness checks -- Semaphore's
+    # raw port is not published on the host, only the TLS proxy is.
+    local https_port; https_port=$(forge_config '.control_plane.proxy_https_port')
+    local semaphore_host; semaphore_host=$(forge_config '.control_plane.semaphore_hostname')
+    api="https://${semaphore_host}:${https_port}/api"
+    resolve="${semaphore_host}:${https_port}:127.0.0.1"
     admin_user=$(sed -n 's/^SEMAPHORE_ADMIN_USER=//p' "$FORGE_ROOT/compose/.env" | head -1)
     admin_password=$(sed -n 's/^SEMAPHORE_ADMIN_PASSWORD=//p' "$FORGE_ROOT/compose/.env" | head -1)
     jar=$(mktemp); chmod 0600 "$jar"
 
     # The password goes in a request body, never on a command line where
     # it would be visible in the process table.
-    if ! curl -fsS -X POST "$api/auth/login" \
+    if ! curl -fsSk --resolve "$resolve" -X POST "$api/auth/login" \
             -H 'Content-Type: application/json' \
             -c "$jar" \
             --data-binary @<(printf '{"auth":"%s","password":"%s"}' "$admin_user" "$admin_password") \
@@ -240,7 +244,7 @@ create_semaphore_token() {
     fi
 
     local token
-    token=$(curl -fsS -X POST "$api/user/tokens" -b "$jar" 2>/dev/null | jq -r '.id // empty')
+    token=$(curl -fsSk --resolve "$resolve" -X POST "$api/user/tokens" -b "$jar" 2>/dev/null | jq -r '.id // empty')
     rm -f "$jar"
 
     [[ -n "$token" ]] || { log_err "Semaphore did not return a token" >&2; return 1; }
@@ -280,19 +284,32 @@ stage_gitops() {
     should_run gitops || { log_dim "skipping stage: gitops"; return 0; }
     log_step "Stage 6/7: Gitea and Semaphore"
 
+    # Neither service publishes its raw HTTP port on the host -- only
+    # the nginx proxy's TLS port is (compose/nginx/proxy.conf routes by
+    # SNI/Host header to gitea:3000 or semaphore:3000 inside the Docker
+    # network). --resolve fakes the DNS lookup so this works before
+    # /etc/hosts has the *.poc.local entries the final summary tells the
+    # operator to add on their own machine.
+    local https_port; https_port=$(forge_config '.control_plane.proxy_https_port')
+    local gitea_host; gitea_host=$(forge_config '.control_plane.gitea_hostname')
+    local semaphore_host; semaphore_host=$(forge_config '.control_plane.semaphore_hostname')
+
     log "waiting for Gitea"
-    local gitea_port; gitea_port=$(forge_config '.control_plane.gitea_http_port')
     local waited=0
-    until curl -fsS "http://127.0.0.1:${gitea_port}/api/v1/version" >/dev/null 2>&1; do
+    # /api/v1/version requires a signed-in user on this Gitea version
+    # ("Only signed in user is allowed to call APIs", 403) -- /api/healthz
+    # is the unauthenticated readiness endpoint.
+    until curl -fsSk --resolve "${gitea_host}:${https_port}:127.0.0.1" \
+            "https://${gitea_host}:${https_port}/api/healthz" >/dev/null 2>&1; do
         (( waited >= 180 )) && die "Gitea did not become ready within 180s (docker compose logs gitea)"
         sleep 5; waited=$((waited + 5))
     done
     log_ok "Gitea is answering"
 
     log "waiting for Semaphore"
-    local semaphore_port; semaphore_port=$(forge_config '.control_plane.semaphore_http_port')
     waited=0
-    until curl -fsS "http://127.0.0.1:${semaphore_port}/api/ping" >/dev/null 2>&1; do
+    until curl -fsSk --resolve "${semaphore_host}:${https_port}:127.0.0.1" \
+            "https://${semaphore_host}:${https_port}/api/ping" >/dev/null 2>&1; do
         (( waited >= 180 )) && die "Semaphore did not become ready within 180s (docker compose logs semaphore)"
         sleep 5; waited=$((waited + 5))
     done
