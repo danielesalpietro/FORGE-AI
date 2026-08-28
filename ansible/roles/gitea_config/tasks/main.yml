@@ -22,20 +22,24 @@
 # =====================================================================
 
 - name: Wait for the Gitea API
+  # /api/v1/version needs a signed-in user on this Gitea version
+  # (GITEA__service__REQUIRE_SIGNIN_VIEW=true in docker-compose.yml) and
+  # no token exists yet at this point in the bootstrap -- /api/healthz
+  # is the unauthenticated readiness endpoint.
   ansible.builtin.uri:
-    url: "{{ gitea_api_url }}/version"
+    url: "{{ gitea_base_url }}/api/healthz"
     method: GET
     status_code: [200]
-  register: forge_gitea_version
+  register: forge_gitea_health
   retries: "{{ (gitea_wait_timeout | int / 10) | round | int }}"
   delay: 10
-  until: forge_gitea_version is succeeded
+  until: forge_gitea_health is succeeded
   changed_when: false
   tags: [bootstrap, gitops]
 
-- name: Report the Gitea version
+- name: Report Gitea health
   ansible.builtin.debug:
-    msg: "Gitea {{ forge_gitea_version.json.version }} is answering at {{ gitea_api_url }}"
+    msg: "Gitea is {{ forge_gitea_health.json.status }} at {{ gitea_api_url }}"
   tags: [bootstrap, gitops]
 
 - name: Require an API token
