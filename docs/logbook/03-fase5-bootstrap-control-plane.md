@@ -275,5 +275,54 @@ posto.
 **Commit**: `783ef42`.
 
 **Stato**: risolto, verificato manualmente con `curl` prima del commit
-per entrambi i servizi; da confermare nel prossimo run completo di
-`bootstrap.sh`.
+per entrambi i servizi — confermato nel run successivo ("Gitea is
+answering" / "Semaphore is answering" entrambi passati).
+
+## Bug 9 — Le automazioni Ansible di `gitea_config`/`semaphore_config` presumono una porta mai pubblicata
+
+**Sintomo**: risolto il Bug 8, `bootstrap.sh` avanza oltre le due
+verifiche bash e arriva a un playbook Ansible dentro Stage 6/7:
+`FAILED - RETRYING: [forge-control]: Wait for the Gitea API` per 30
+tentativi, poi `Connection refused`.
+
+**Causa**: stesso problema di fondo del Bug 8, ma questa volta dentro
+Ansible, non in `bootstrap.sh`. `gitea_api_url` (ruolo `gitea_config`,
+9 usi) e `semaphore_api_url` (ruolo `semaphore_config`, 23 usi tra
+`main.yml`, `templates.yml`, `repository.yml`, `keys.yml`) sono
+entrambi definiti come `http://127.0.0.1:{{ ...http_port }}/...` — ma
+né la porta di Gitea (3000) né quella di Semaphore (3001) erano mai
+pubblicate sull'host da `compose/docker-compose.yml`. Confermato
+leggendo il blocco servizio di entrambi: Gitea pubblica solo la porta
+SSH (2222) con un commento esplicito e intenzionale — "HTTP is reached
+through the proxy only" — Semaphore non pubblicava nessuna porta.
+
+**Non un errore di battitura**: `GITEA__service__REQUIRE_SIGNIN_VIEW:
+"true"` nello stesso file spiega anche il 403 del Bug 8 su
+`/api/v1/version` — la scelta di instradare tutto tramite proxy TLS è
+reale e voluta, per l'accesso browser/LAN. Il problema è che i ruoli
+Ansible che orchestrano lo stack (automazione *interna*, non un
+browser esterno) presumevano comunque un accesso diretto via loopback
+che non è mai esistito.
+
+**Alternative valutate e scartate**: instradare tutte le 32 chiamate
+`ansible.builtin.uri` attraverso il proxy TLS (stesso approccio del Bug
+8) avrebbe richiesto: (a) una risoluzione hostname per `gitea.poc.local`/
+`semaphore.poc.local` sull'host di controllo — verificato con `getent
+hosts`/`cat /etc/hosts`: **non esiste**, nonostante `config/defaults.yml`
+dica esplicitamente che sono "expected in /etc/hosts on the KVM host";
+(b) `validate_certs: false` aggiunto singolarmente su ognuna delle 32
+chiamate. Scartata per l'ampiezza della modifica necessaria a fronte
+del tempo disponibile.
+
+**Correzione applicata**: pubblicate entrambe le porte su loopback in
+`compose/docker-compose.yml` (`127.0.0.1:3000` per Gitea,
+`127.0.0.1:3001` per Semaphore, con override da variabile d'ambiente
+come già fatto per le altre porte nello stesso file) — stesso confine
+di fiducia del bind loopback già usato dal proxy stesso, nulla diventa
+raggiungibile dalla LAN. Nessuna modifica al codice Ansible esistente,
+che era già scritto assumendo esattamente questo.
+
+**Stato**: risolto, da confermare nel prossimo run (richiede che
+`docker compose up -d` ricrei i container di Gitea/Semaphore con la
+nuova mappatura delle porte — gestito automaticamente dallo Stage 5 di
+`bootstrap.sh` alla prossima esecuzione).
