@@ -322,7 +322,69 @@ di fiducia del bind loopback già usato dal proxy stesso, nulla diventa
 raggiungibile dalla LAN. Nessuna modifica al codice Ansible esistente,
 che era già scritto assumendo esattamente questo.
 
-**Stato**: risolto, da confermare nel prossimo run (richiede che
-`docker compose up -d` ricrei i container di Gitea/Semaphore con la
-nuova mappatura delle porte — gestito automaticamente dallo Stage 5 di
-`bootstrap.sh` alla prossima esecuzione).
+**Stato**: risolto — confermato nel run successivo: connessione
+riuscita (niente più "Connection refused"), sostituita da un problema
+diverso (Bug 10).
+
+## Bug 10 — Stesso 403 di autenticazione, questa volta nel task Ansible di attesa
+
+**Sintomo**: risolto il Bug 9, il task Ansible `gitea_config : Wait for
+the Gitea API` non fallisce più per connessione rifiutata, ma esaurisce
+comunque tutti i 30 tentativi (300 secondi) prima di arrendersi con
+`Status code was 403 and not [200]: HTTP Error 403: Forbidden`.
+
+**Causa**: identica al bug collaterale già trovato nel Bug 8 — questo
+task interroga `{{ gitea_api_url }}/version` (cioè `/api/v1/version`),
+che richiede un utente autenticato, mentre nessun token esiste ancora
+a questo punto del bootstrap (viene creato solo dopo, da
+`create_gitea_token()` in `bootstrap.sh`). Stavolta il bug viveva nel
+ruolo Ansible, non nello script bash già corretto.
+
+**Verifica**: `curl http://127.0.0.1:3000/api/healthz` (ora
+raggiungibile grazie al Bug 9) -> `{"status":"pass",...}`, nessuna
+autenticazione richiesta, nessun campo versione nella risposta.
+
+**Correzione**: separata `gitea_base_url` (senza `/api/v1`) da
+`gitea_api_url` in `ansible/roles/gitea_config/defaults/main.yml`; il
+task di attesa ora interroga `{{ gitea_base_url }}/api/healthz` e
+riporta lo stato di salute invece del numero di versione (che
+`/healthz` non fornisce).
+
+**Commit**: `8284008`.
+
+**Stato**: risolto — confermato: sia "Wait for the Gitea API" sia
+"Report Gitea health" passati puliti nel run successivo.
+
+## Bug 11 — L'utente admin di Gitea non viene mai creato
+
+**Sintomo**: risolti i Bug 9-10, arriva al task
+`gitea_config : Require an API token`, che fallisce:
+`vault_gitea_api_token is empty`.
+
+**Causa**: nel log di `bootstrap.sh` (che gira *prima* del playbook
+Ansible): `[FAIL] could not create a Gitea token: Command error: user
+does not exist [uid: 0, name: forgeadmin]`. `compose/.env.example`
+documenta esplicitamente questo account come "created by
+bootstrap/bootstrap.sh (`gitea admin user create`)" — ma quella
+chiamata **non esiste da nessuna parte** nello script (verificato con
+`grep`). `GITEA__security__INSTALL_LOCK: "true"` disabilita il wizard
+di setup di Gitea, quindi senza quella chiamata l'utente admin non
+viene mai creato da nient'altro. Stesso schema del Bug 2
+(`libvirt_host` mai collegato): comportamento documentato, mai
+implementato.
+
+**Verifica sintassi prima di scrivere il comando**: `docker exec -u git
+forge-gitea gitea admin user create --help`, contro il binario reale
+in esecuzione, non a memoria.
+
+**Correzione**: aggiunta la chiamata mancante in `create_gitea_token()`
+di `bootstrap.sh`, usando `GITEA_ADMIN_PASSWORD`/`GITEA_ADMIN_EMAIL`
+già scritti in `compose/.env` da `create-secrets.sh` ma mai consumati
+da nessuno — verificato con `grep -c` sul `.env` reale della VM che
+tutte e tre le variabili esistessero davvero prima di scrivere il fix.
+Idempotente, stessa tolleranza "already exists" già usata dal passo di
+creazione del token subito dopo.
+
+**Commit**: `e9cbf5b`.
+
+**Stato**: risolto, da confermare nel prossimo run.
