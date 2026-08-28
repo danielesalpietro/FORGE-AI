@@ -18,6 +18,10 @@ pypsrp>=0.8.1,<1.1
 # libvirt bindings for community.libvirt.
 libvirt-python>=10.0.0
 
+# json_query filter (community.general), used by libvirt_network to
+# confirm the provisioning bridge carries the expected gateway address.
+jmespath>=1.0,<2
+
 # Configuration validation and template rendering used by
 # scripts/validate-config.py and the test suite.
 jsonschema>=4.21,<5
