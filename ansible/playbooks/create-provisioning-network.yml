@@ -36,5 +36,7 @@
       tags: [network, validation]
 
   roles:
+    - role: libvirt_host
+      tags: [network, provisioning]
     - role: libvirt_network
       tags: [network, provisioning]
