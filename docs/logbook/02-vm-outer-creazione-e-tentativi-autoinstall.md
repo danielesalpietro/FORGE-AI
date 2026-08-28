@@ -910,3 +910,51 @@ quel momento anche l'ISO Ubuntu già presente sullo stesso datastore
 (richiesta esplicita di Daniele) invece di trattarle separatamente.
 
 **Stato**: in corso (download su Windows), non ancora completato.
+
+## ~2026-08-28 18:3x UTC — `shellcheck`/`bats` mancanti, `compose/.env`, secrets, `check-prerequisites.sh` -> READY
+
+**Correzione ai gap trovati da `make lint`** (voce precedente):
+
+    sudo apt-get install -y -qq shellcheck bats
+    cp compose/.env.example compose/.env
+
+**Osservato**: `make lint` -> `ansible-lint` pulito, `shellcheck` "ok 16
+scripts", `docker-compose.yml` "ok" -> `==> Lint clean`.
+
+**Primo tentativo `check-prerequisites.sh --verbose` (senza sudo)**:
+`NOT READY -- 2 error(s), 2 warning(s)`:
+- `[FAIL] privileges: no root or sudo access` — lo script va lanciato
+  con sudo, non semplice utente.
+- `[FAIL] secrets: compose/.env still contains placeholder values` —
+  serve `create-secrets.sh` prima.
+- I due warning (`media-ubuntu`, `media-windows`) sono quelli attesi
+  dal piano, non errori.
+
+**Comando/i**:
+
+    ./bootstrap/create-secrets.sh
+
+**Osservato**: chiave SSH dedicata `~/.ssh/forge-ai-poc` (ed25519, senza
+passphrase, per uso non presidiato da Ansible/Semaphore), Ansible Vault
+creato e cifrato, certificato TLS self-signed (825 giorni, SAN per
+gitea.poc.local/semaphore.poc.local/localhost/192.168.250.1). Tutti i
+file secret mode 600, nessuno tracciato da Git (verificato dallo script
+stesso contro `.gitignore` e il workflow CI di sicurezza).
+
+**Comando/i (rilancio con sudo, preservando il venv Python nel PATH)**:
+
+    sudo -E env PATH=$PATH ./bootstrap/check-prerequisites.sh --verbose
+
+**Osservato**:
+
+    ================================================================
+     READY -- 33 checks, 2 warning(s)
+    ================================================================
+
+Esattamente lo stato "fatto" richiesto dalla Fase 4 del piano
+(`READY`, con solo i due warning attesi su `media-ubuntu`/
+`media-windows`).
+
+**Stato**: fatto. Fase 4 completa. Prossimo: Fase 5 (`bootstrap.sh`,
+`test-integration`, `test-molecule` — mai eseguiti in nessun ambiente
+prima d'ora).
