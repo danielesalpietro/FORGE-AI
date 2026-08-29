@@ -202,6 +202,20 @@ autoinstall:
       SSHD
     - curtin in-target --target=/target -- systemctl enable ssh
     - curtin in-target --target=/target -- mkdir -p /etc/forge-ai
+    # The autoinstall identity block puts the automation user in the
+    # sudo group, but that alone still requires ITS OWN password for
+    # `sudo` -- a password Ansible never has (it only ever gets an SSH
+    # key). Without this, every `become: true` task fails with "timed
+    # out waiting for ping module test: Missing sudo password"
+    # (confirmed on real hardware: provision-ubuntu.yml's "Wait for the
+    # SSH service to accept a connection" task, 15+ minutes of retries
+    # before giving up). NOPASSWD is scoped to this one automation
+    # account, not the whole sudo group.
+    - |
+      cat > /target/etc/sudoers.d/90-forge-ai-automation <<'SUDOERS'
+      {{ users.automation_user }} ALL=(ALL) NOPASSWD:ALL
+      SUDOERS
+      chmod 0440 /target/etc/sudoers.d/90-forge-ai-automation
     # Preserve the installer logs on the installed system for the report.
     - cp -a /var/log/installer /target/var/log/forge-ai-installer || true
     # Tell the state service the installation finished. The reboot that

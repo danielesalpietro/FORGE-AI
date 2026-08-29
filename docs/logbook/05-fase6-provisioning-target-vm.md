@@ -538,3 +538,82 @@ al disco. Aggiornato anche il riferimento in `docs/REFERENCES.md`.
 File toccati: `compose/state-service/app.py`,
 `ansible/templates/ipxe/boot.ipxe.j2`,
 `ansible/templates/ipxe/menu.ipxe.j2`, `docs/REFERENCES.md`.
+
+**Verifica**: dopo il fix (container `state-service` ricostruito,
+`make deploy-pxe` rifatto), reset della VM e navigazione manuale nel
+Boot Manager UEFI (`virsh send-key` + `virsh screenshot`) per
+confermare che una voce "Ubuntu" valida esiste davvero nel firmware
+(grub-install aveva funzionato). Selezionata manualmente una volta:
+**il sistema installato si avvia per davvero**, e SSH con la chiave di
+deployment (`~/.ssh/forge-ai-poc`, path confermato in
+`vault_ssh_private_key_path`) conferma:
+
+    Static hostname: poc-ubuntu-01
+    Operating System: Ubuntu 24.04.3 LTS
+    Kernel: Linux 6.8.0-138-generic
+    FORGE-AI Proof of Concept system -- managed state, do not modify by hand.
+
+Primo host FORGE-AI installato **e avviato** con successo su hardware
+reale.
+
+## Pulizia operativa — processi ansible-playbook concorrenti orfani
+
+Durante i tentativi di far applicare l'ordine di boot corretto in modo
+automatico (non con `send-key` manuale), diverse chiamate `make
+provision-ubuntu` lanciate con un timeout locale breve (senza
+`run_in_background`) hanno lasciato **sette processi
+`ansible-playbook` orfani** in esecuzione concorrente sull'host — il
+timeout del tool locale termina il client `plink`, ma non sempre il
+processo remoto che continua a girare distaccato. Rilevato con `ps
+aux | grep ansible-playbook` (sette PID, timestamp di avvio diversi
+da 23:00 a 23:39). Un log letto durante questa fase mostrava un
+messaggio fuorviante ("first boot device is now network") — quasi
+certamente un artefatto dell'interleaving fra processi concorrenti che
+si sovrascrivevano a vicenda la definizione del dominio, non un vero
+bug del playbook: la definizione persistente reale (`virsh dumpxml
+--inactive`), controllata subito dopo, mostrava già correttamente
+`<boot dev='hd'/>` prima di `<boot dev='network'/>`.
+
+**Lezione operativa**: mai lanciare `make provision-ubuntu` (o
+qualunque `ansible-playbook` di durata non banale) con un timeout
+locale breve senza `run_in_background: true` — ripulito con `pkill -9
+-f "ansible-playbook playbooks/provision-ubuntu.yml"` e rilanciato con
+un'unica esecuzione pulita in background.
+
+## Bug 23 — nessun sudo NOPASSWD per l'utente di automazione
+
+**Sintomo**: la run pulita di `make provision-ubuntu` fallisce dopo
+~15 minuti di retry su un task diverso da quelli già risolti:
+
+    TASK [Wait for the SSH service to accept a connection]
+    fatal: [poc-ubuntu-01]: FAILED! => changed=false
+      elapsed: 919
+      msg: 'timed out waiting for ping module test: Missing sudo password'
+
+**Diagnosi**: `ansible/inventories/poc/group_vars/linux/main.yml`
+imposta `ansible_become: true` / `ansible_become_method:
+ansible.builtin.sudo` — ogni task Ansible su un host Linux richiede
+`sudo`. L'utente di automazione (`users.automation_user`, `forgeops`)
+viene creato dal blocco `identity` dell'autoinstall (verificato in
+`ansible/templates/ubuntu/user-data.j2`) **senza** alcuna direttiva
+`sudo:`/NOPASSWD — finisce nel gruppo `sudo` di default, ma `sudo`
+richiede comunque la password dell'UTENTE stesso, password che Ansible
+non ha mai (si autentica solo con la chiave SSH). Nessun late-command
+esistente scrive un file in `/etc/sudoers.d/`.
+
+**Correzione applicata**: `ansible/templates/ubuntu/user-data.j2` —
+aggiunto un late-command che scrive
+`/target/etc/sudoers.d/90-forge-ai-automation` con
+`{{ users.automation_user }} ALL=(ALL) NOPASSWD:ALL`, permessi `0440`
+(richiesti da sudo). L'ambito è il solo account di automazione, non
+l'intero gruppo `sudo`.
+
+**Rimedio immediato per `poc-ubuntu-01`** (già installata, il fix nel
+template si applica solo a un'installazione nuova): scritto lo stesso
+file **da root**, senza bisogno della password di `forgeops`, tramite
+`qemu-guest-agent` (già installato e attivo) via `virsh
+qemu-agent-command` con `guest-exec` / `guest-exec-status` —
+`visudo -cf` sul file appena scritto ha confermato `parsed OK`.
+
+**Verifica**: `ssh -i ~/.ssh/forge-ai-poc forgeops@192.168.250.21
+'sudo -n whoami'` -> `root`, senza alcun prompt di password.
