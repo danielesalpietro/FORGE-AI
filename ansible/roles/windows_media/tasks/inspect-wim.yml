@@ -12,18 +12,25 @@
 # =====================================================================
 
 - name: Read the image metadata from the installation image
-  ansible.builtin.command: "wimlib-imagex info {{ forge_windows_install_image }} --xml"
+  # wimlib prints this XML as UTF-16 with a BOM, verbatim -- piping it
+  # through iconv first is required, not cosmetic: ansible.builtin.command
+  # captures stdout and round-trips it through its own JSON-based module
+  # protocol, which demands valid UTF-8. Raw UTF-16 bytes decoded as UTF-8
+  # produce lone surrogates, and Ansible refuses to deserialize those
+  # ("Refusing to deserialize an invalid UTF8 string ... surrogates not
+  # allowed") before this task's own regex_replace ever gets a chance to
+  # run -- confirmed on real hardware, and by inspecting the raw output
+  # with `file`/`xxd` (UTF-16 little-endian, BOM FF FE).
+  ansible.builtin.shell: "wimlib-imagex info {{ forge_windows_install_image | quote }} --xml | iconv -f UTF-16 -t UTF-8"
   become: true
   changed_when: false
   register: forge_wim_xml
   tags: [media, windows, validation]
 
 - name: Extract the edition list
-  # The XML is UTF-16 with a BOM; wimlib prints it verbatim, so pull the
-  # names and indexes out with a regex rather than an XML parser.
   ansible.builtin.set_fact:
     forge_wim_editions: >-
-      {{ forge_wim_xml.stdout | regex_replace('\x00', '')
+      {{ forge_wim_xml.stdout
          | regex_findall('<IMAGE INDEX="(\d+)">.*?<NAME>([^<]+)</NAME>', multiline=True, ignorecase=True) }}
   tags: [media, windows, validation]
 
