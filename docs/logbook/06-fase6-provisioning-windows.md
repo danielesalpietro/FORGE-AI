@@ -199,3 +199,36 @@ fosse configurata in questa sessione, quindi al momento di quel primo
 dall'errore stesso; confermato raggiungibile con
 `smbclient -N -L //192.168.250.1` (condivisioni `winmedia` e `virtio`
 entrambe presenti).
+
+## Bug 27 — `qxl` video model non supportato da questa build QEMU
+
+**Sintomo**: dopo aver superato bug 24, 25 e avviato `winmedia`,
+`make provision-windows` arriva per la prima volta a definire il
+dominio libvirt per `poc-windows-01` e fallisce subito:
+
+    msg: 'libvirtError: unsupported configuration: domain configuration
+          does not support video model ''qxl'''
+
+**Diagnosi**: `ansible/templates/libvirt/domain.xml.j2` sceglie il
+modello video in base al sistema operativo:
+`{{ 'qxl' if host.os_family == 'windows' else 'virtio' }}`. `qxl`
+richiede QEMU compilato con supporto SPICE, che questa build non ha.
+Verificato senza assumere, interrogando le capacità reali dell'host:
+
+    virsh domcapabilities --machine q35 --arch x86_64 --virttype kvm
+      -> <video supported='yes'><enum name='modelType'>
+           vga, cirrus, vmvga, virtio, none, bochs, ramfb
+         </enum></video>
+
+`qxl` non compare nell'elenco. Nessun problema per `poc-ubuntu-01`,
+che usa già `virtio` (nell'elenco supportato) — il problema riguardava
+solo il ramo Windows del condizionale.
+
+**Correzione applicata**: `ansible/templates/libvirt/domain.xml.j2` —
+`qxl` sostituito con `bochs` per i guest Windows: un framebuffer
+"stupido" che QEMU emula senza bisogno di alcun driver guest, la
+scelta convenzionale per un guest Windows senza SPICE, così Setup/WinPE
+hanno comunque un display prima che carichi qualunque driver GPU.
+Linux resta su `virtio` (già collaudato su `poc-ubuntu-01`). Nessun
+altro riferimento a `qxl` nel repository (verificato con una ricerca
+mirata).

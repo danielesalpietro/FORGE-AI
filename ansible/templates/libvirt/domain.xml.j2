@@ -145,7 +145,18 @@
       <listen type="address" address="127.0.0.1"/>
     </graphics>
     <video>
-      <model type="{{ 'qxl' if host.os_family == 'windows' else 'virtio' }}" heads="1"/>
+      <!-- qxl needs QEMU built with SPICE support, which this host's
+           build does not have -- libvirt refuses the domain outright
+           ("unsupported configuration: domain configuration does not
+           support video model 'qxl'"), confirmed against this host's
+           own `virsh domcapabilities` (modelType enum:
+           vga/cirrus/vmvga/virtio/none/bochs/ramfb, no qxl). bochs is
+           a dumb framebuffer QEMU emulates without any guest driver --
+           the conventional no-SPICE choice for a Windows guest, so
+           Setup/WinPE still get a display before any GPU driver loads.
+           Linux still gets virtio (already proven working on
+           poc-ubuntu-01). -->
+      <model type="{{ 'bochs' if host.os_family == 'windows' else 'virtio' }}" heads="1"/>
     </video>
 
     <memballoon model="virtio"/>
