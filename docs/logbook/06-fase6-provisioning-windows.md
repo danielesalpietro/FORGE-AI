@@ -177,3 +177,25 @@ contiene già i driver correttamente iniettati (verificato a mano) — al
 prossimo tentativo la copia/iniezione verrà saltata perché il file
 esiste già (`when: forge_wim_copied is changed`), ma la verifica ora
 corretta troverà i driver reali già presenti e passerà.
+
+## Nota operativa — il servizio `winmedia` (SMB export) non era in esecuzione
+
+**Non un bug.** Superato il bug 25, il playbook si è fermato con un
+messaggio guida chiaro:
+
+    The Windows media SMB export at //192.168.250.1 is not answering.
+    WinPE cannot reach install.wim without it...
+
+    Start it:
+      docker compose ... --profile windows up -d winmedia
+
+`Makefile:50` calcola dinamicamente `WINDOWS_PROFILE` da
+`media.windows.iso_path` in `config/poc.yml` e lo aggiunge alle
+invocazioni di `docker compose up`. Il controllo plane era già stato
+avviato con `make bootstrap`/`make up` **prima** che l'ISO Windows
+fosse configurata in questa sessione, quindi al momento di quel primo
+`up` il profilo `windows` non veniva ancora richiesto e `winmedia` non
+è mai partito. Avviato manualmente con il comando suggerito
+dall'errore stesso; confermato raggiungibile con
+`smbclient -N -L //192.168.250.1` (condivisioni `winmedia` e `virtio`
+entrambe presenti).
