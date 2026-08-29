@@ -83,3 +83,36 @@ conversione) ed è stato rimosso.
 **Verifica**: `wimlib-imagex info install.wim --xml | iconv -f UTF-16
 -t UTF-8 | head -c 200` produce XML leggibile e valido
 (`<WIM><TOTALBYTES>7255895157</TOTALBYTES><IMAGE INDEX="1">...`).
+
+Ri-lanciato `make provision-windows`: superato correttamente il punto
+del bug 24, edizione risolta (`index 2: "Windows Server 2025
+SERVERSTANDARD"`), estrazione ISO saltata correttamente (già fatta al
+tentativo precedente).
+
+## Nota operativa — stallo di rete durante il download di virtio-win.iso
+
+**Non un bug del repository.** Il task "Download the VirtIO driver ISO"
+(fetch di `virtio-win-0.1.266.iso`, 691 MB, da `fedorapeople.org`) si è
+fermato dopo aver scritto ~86 MB, restando fermo per 4+ minuti pur con
+la connessione TCP ancora in stato `ESTAB`.
+
+**Diagnosi**: confermato con `/proc/<pid>/io` che `wchar` (byte scritti
+su disco) era rimasto **identico** (86069598) su due controlli a 5
+minuti di distanza — non un download lento, un download fermo per
+davvero. `ss -tpi` sulla connessione ha mostrato `rcv_ooopack:6374`
+(pacchetti ricevuti fuori ordine) e nessun byte ricevuto negli ultimi
+264 secondi (`lastrcv`) nonostante lo stato ancora `ESTAB` — coerente
+con un segmento perso mai ritrasmesso su quella specifica sessione TCP,
+un'anomalia di rete verso quel server/percorso, non un problema di
+raggiungibilità (un semplice `curl -I` verso lo stesso URL era stato
+confermato funzionante pochi minuti prima con HTTP 200 in meno di un
+secondo).
+
+**Azione**: terminato il processo bloccato (`pkill -9` sul playbook,
+poi `kill -9` sui figli `AnsiballZ_get_url.py` rimasti orfani —
+uccidere il processo padre non termina automaticamente i figli già
+biforcati). Nessun file parziale lasciato nella destinazione (il
+modulo `get_url` di Ansible scrive su un file temporaneo prima del
+rename finale, quindi un fallimento a metà non lascia un file
+troncato al suo posto). Ripetuto `make provision-windows` da capo con
+una connessione TCP nuova.
