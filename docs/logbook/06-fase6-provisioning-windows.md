@@ -529,19 +529,79 @@ imbattesse nello stesso sintomo durante un debug intensivo: la
 soluzione immediata è riavviare `winmedia` prima del tentativo
 successivo.
 
+Con `winmedia` appena riavviato e un solo reset manuale della VM (nessun
+reset intermedio successivo), il tentativo 2/3 ha superato in sequenza
+tutti i passi già corretti in questa sessione — `net use` riuscito al
+primo colpo, diskpart con "DiskPart successfully onlined the selected
+disk." + "Disk attributes cleared successfully." + clean + convert GPT
+tutti riusciti — confermando bug 28, 29, 30 e 31 tutti risolti insieme
+per la prima volta nello stesso avvio. `setup.exe` è stato raggiunto e
+lanciato, ma è uscito con un nuovo codice non ancora visto:
+
+    [error] setup.exe returned control with errorlevel -1047527137.
+
+## Bug 32 (aperto, non risolto) — `setup.exe` esce con 0xC190011F dopo aver superato bug 28-31
+
+**Non root-causato in questa sessione.** -1047527137 come intero a 32
+bit con segno corrisponde a `0xC190011F` — nella famiglia di codici
+`MOSETUP_E_*` documentata da Microsoft per il caricamento/validazione
+del file di risposta ("Windows setup encountered an internal error
+while loading or searching for an unattend answer file"), ma il valore
+esatto non compare nella pagina ufficiale delle opzioni da riga di
+comando consultata in questa sessione, e senza `setupact.log` (mai
+scritto: `X:\Windows\Panther\` contiene solo i file di telemetria
+`DlTel-Merge.etl`/`windlp.state.xml`, nessuna cartella `NewOs` questa
+volta) non è stato possibile isolarne la causa esatta con evidenza
+diretta come per i bug precedenti.
+
+Elementi noti che lo distinguono dai bug già risolti:
+
+  - non è più "invalid command line argument" (quel dialogo esplicito
+    non è più comparso da quando `--name` è stato corretto insieme al
+    token cmdline in bug 30) — il file di risposta viene trovato e
+    almeno in parte elaborato;
+  - non è più errorlevel 5 generico (bug 29/30 originali) né l'assenza
+    di `NewOs` per un semplice fallimento di analisi XML immediato,
+    dato che in un tentativo precedente **con lo stesso identico
+    contenuto XML completo** (i quattro pass, letto via `I:\` invece
+    che dal percorso iniettato da wimboot) Setup era arrivato fino alla
+    fase di staging (`NewOs` presente) con successo;
+  - è comparso **solo** nei tentativi successivi all'aggiunta di `online
+    disk` / `attributes disk clear readonly` al passo diskpart (bug
+    31) — non ancora confermato se le due cose siano causalmente
+    collegate o una coincidenza dovuta al fatto che questi sono stati
+    anche i primi tentativi ad arrivare a `setup.exe` con un disco già
+    pulito da un run precedente.
+
+**Ipotesi da verificare in una prossima sessione, non ancora testate:**
+
+  1. Isolare di nuovo per eliminazione (come per bug 30) usando lo
+     stesso trucco `I:\setup.exe /unattend:I:\<file>` sulla condivisione
+     scrivibile lato host, questa volta con il file di risposta REALE
+     completo (non quello minimale) per vedere se fallisce anche lì —
+     se sì, il problema è nel contenuto o nello stato del disco, non
+     nel percorso di iniezione; se no, punta di nuovo a qualcosa di
+     specifico del percorso `X:\Windows\System32\forge-unattend.xml`.
+  2. Provare `setup.exe /unattend:... /noreboot /emsport off` con
+     logging esplicito, o cercare se questa build WinPE espone un modo
+     di ottenere `setupact.log` prima del fallimento (es. un
+     `/logpath` esplicito).
+  3. Verificare se `online disk` + `attributes disk clear readonly`
+     lasciano il disco in uno stato (es. stile MBR residuo, o una
+     GPT header duplicata) che il `<DiskConfiguration>` di Setup non
+     si aspetta, confrontando l'output di `diskpart` → `list disk` /
+     `list partition` subito dopo il fix, prima di invocare `setup.exe`.
+
 ## Stato finale di questa sessione
 
-Bug 28, 29, 30 (e la sua correzione) e 31 tutti corretti, ciascuno
-verificato singolarmente su console reale con evidenza diretta (log di
-`drvload`, assenza di "Access is denied", nome file iniettato
-confermato via `dir`, "DiskPart successfully onlined..."). Non è stato
-ancora osservato un run completo `make provision-windows` che superi
-*tutti* i passi in sequenza in un colpo solo, a causa della flakiness
-SMB intermittente descritta sopra, che ha interrotto gli ultimi
-tentativi al passo 3/6 nonostante i passi successivi (4/6, 6/6) fossero
-già stati verificati funzionanti singolarmente in tentativi precedenti
-nella stessa sessione. Il prossimo passo naturale è ripetere `make
-provision-windows` con un `winmedia` appena riavviato e senza reset
-manuali intermedi, lasciando che il ciclo naturale di retry
-dell'installer (fino a 3 tentativi) assorba un'eventuale flakiness
-isolata.
+Bug 28, 29, 30 (e la sua correzione) e 31 tutti corretti e verificati
+singolarmente con evidenza diretta su console reale, e per la prima
+volta confermati funzionare **insieme** nello stesso avvio (tentativo
+2/3, vedi sopra). Bug 32 resta aperto: `setup.exe` viene raggiunto e
+lanciato correttamente ma esce con `0xC190011F` prima di scrivere
+`setupact.log`, causa non ancora isolata. La condivisione SMB
+`winmedia` resta un limite operativo noto sotto reset ravvicinati
+ripetuti (vedi nota sopra), mitigato riavviando il container prima di
+ogni nuovo tentativo pulito. Prossimo passo naturale: le tre ipotesi
+elencate sopra per bug 32, a partire dalla n. 1 (il test di isolamento
+più economico e già collaudato in questa sessione).
