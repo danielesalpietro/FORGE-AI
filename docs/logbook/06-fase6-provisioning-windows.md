@@ -591,6 +591,19 @@ Elementi noti che lo distinguono dai bug già risolti:
      GPT header duplicata) che il `<DiskConfiguration>` di Setup non
      si aspetta, confrontando l'output di `diskpart` → `list disk` /
      `list partition` subito dopo il fix, prima di invocare `setup.exe`.
+  4. (Suggerita da un consiglio esterno rivisto in questa sessione,
+     non ancora testata.) Cambiare il meccanismo di consegna: invece
+     di iniettare `Autounattend.xml` dentro il WIM via wimboot e
+     passarlo con `/unattend:` esplicito, allegarlo come supporto
+     virtuale separato (piccola ISO/floppy costruita da Ansible,
+     seconda voce `<disk>` nel dominio libvirt, sullo stesso pattern
+     già usato per `windows_attach_virtio_cdrom` in `domain.xml.j2`)
+     e **rimuovere il flag `/unattend:` esplicito**, lasciando che
+     Setup lo trovi da solo sul supporto allegato. Sposterebbe il file
+     fuori dal percorso wimboot -- quello già responsabile dei bug 28
+     e 30 -- ed eliminerebbe strutturalmente l'intera classe di
+     conflitti rilevamento-automatico/flag-esplicito, non solo il caso
+     già corretto.
 
 ## Stato finale di questa sessione
 
