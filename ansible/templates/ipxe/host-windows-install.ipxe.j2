@@ -44,7 +44,14 @@ imgfetch --name boot.wim   ${winroot}/boot.wim             boot.wim   || goto fa
 # writing them to a shared, world-readable location on the KVM host and
 # without needing an SMB mount before the network is up.
 imgfetch --name startnet.cmd     ${winroot}/startnet.cmd     startnet.cmd     || goto failed
-imgfetch --name Autounattend.xml ${winroot}/Autounattend.xml Autounattend.xml || goto failed
+# Injected as forge-unattend.xml, not the conventional "Autounattend.xml":
+# bug 30 (docs/logbook/06-fase6-provisioning-windows.md) -- Windows Setup
+# auto-detects \Windows\System32\Autounattend.xml on its own, and having
+# a file there AND passing the same file via an explicit /unattend: flag
+# makes setup.exe exit instantly with errorlevel 5, confirmed by moving
+# the identical, byte-for-byte file to a different name and watching it
+# succeed. A non-conventional name sidesteps Setup's own auto-detection.
+imgfetch --name Autounattend.xml ${winroot}/Autounattend.xml forge-unattend.xml || goto failed
 
 boot || goto failed
 

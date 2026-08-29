@@ -156,6 +156,33 @@
   changed_when: forge_windows_extract.rc == 0
   tags: [media, windows]
 
+- name: Fix executable permissions lost during extraction  # noqa: no-handler
+  # Not a handler: must run before anything reads the tree via SMB. 7z preserves whatever the ISO's own filesystem
+  # recorded, and ISO9660/UDF do not track a Unix execute bit at all --
+  # every extracted file, setup.exe included, comes out mode 644. Bug 29
+  # (docs/logbook/06-fase6-provisioning-windows.md): the [winmedia] SMB
+  # share forces every connection to the Unix user "nobody" (smb.conf,
+  # "force user = nobody"), which falls into the file's "other" class --
+  # so Samba faithfully denies CreateProcess-style execute access on a
+  # 644 file, even though `if exist` and `type` (read-only opens) work
+  # fine. WinPE's startnet.cmd could reach every step through diskpart,
+  # then "I:\setup.exe /unattend:..." returned "Access is denied."
+  # (errorlevel 5), confirmed by running the same command interactively
+  # from a WinPE console. Read-only media served to a Windows guest has
+  # no reason to withhold the Unix execute bit from anyone, so this
+  # grants it unconditionally rather than hunting down every binary
+  # Windows Setup might eventually try to run from this tree.
+  ansible.builtin.shell:
+    cmd: |
+      set -Eeuo pipefail
+      chmod -R a+rX "{{ storage.http_root }}/windows/media"
+      find "{{ storage.http_root }}/windows/media" -type f -exec chmod a+rx {} +
+    executable: /bin/bash
+  become: true
+  when: forge_windows_extract is changed
+  changed_when: true
+  tags: [media, windows]
+
 - name: Re-check which image format is present after extraction
   ansible.builtin.stat:
     path: "{{ storage.http_root }}/windows/media/sources/{{ item }}"

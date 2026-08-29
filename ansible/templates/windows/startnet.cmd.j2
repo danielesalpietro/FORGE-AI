@@ -121,7 +121,13 @@ echo [6/6] Starting Windows Setup (this takes 15-30 minutes)...
 echo [6/6] setup.exe >> "%FORGE_LOG%"
 copy /y "%FORGE_LOG%" %FORGE_SRC%\..\logs\%FORGE_HOST%-winpe.log >nul 2>&1
 
-%FORGE_SRC%\setup.exe /unattend:X:\Windows\System32\Autounattend.xml
+rem Deliberately NOT X:\Windows\System32\Autounattend.xml -- Setup
+rem auto-detects that exact conventional path on its own, and a file
+rem there conflicts with the explicit /unattend flag below, making
+rem setup.exe exit instantly with errorlevel 5 (bug 30). wimboot injects
+rem the same answer file content under the name forge-unattend.xml
+rem specifically to avoid that auto-detected path.
+%FORGE_SRC%\setup.exe /unattend:X:\Windows\System32\forge-unattend.xml
 
 rem Setup normally reboots and never returns here.
 echo [error] setup.exe returned control with errorlevel %errorlevel%. >> "%FORGE_LOG%"

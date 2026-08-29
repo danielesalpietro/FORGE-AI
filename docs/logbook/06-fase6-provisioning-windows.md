@@ -246,3 +246,204 @@ qcow2 (231s, genuinamente attivo per tutto il tempo, confermato con
 `ps aux`/CPU time in crescita costante — non uno stallo) era finalmente
 terminato. Corretto sostituendo i doppi trattini con due punti nel
 commento, senza toccare la logica.
+
+Con questi fix, `poc-windows-01` ha completato per la prima volta
+l'intera catena di boot (PXE → iPXE → wimboot → boot.wim → GUI grafica
+di "Windows Server Setup", visibile via `virsh screenshot`) — un
+traguardo importante, ma la GUI si è fermata su "A media driver your
+computer needs is missing" (nessun disco visibile), nonostante bug 25
+avesse già confermato i driver VirtIO correttamente presenti nel WIM.
+
+## Sessione successiva — diagnosi interattiva via console (Shift+F10)
+
+Ripresa della diagnosi da uno snapshot dello stato descritto sopra.
+Navigazione GUI del selettore cartelle (via `virsh send-key`, nessun
+supporto mouse nativo in virsh) per cercare manualmente la cartella
+`drivers` inconcludente — non compariva nell'albero alfabetico tra
+"DiagTrack" ed "en-US", verosimilmente perché il picker filtra le
+cartelle con l'attributo "System" di Windows, non perché i file
+mancassero. Abbandonato questo percorso come inaffidabile.
+
+Pivot verso **Shift+F10**, la scorciatoia standard di Windows Setup per
+aprire un prompt dei comandi reale durante l'installazione — molto più
+diretto della navigazione GUI alla cieca. Da lì, lettura diretta di
+`X:\forge-ai.log`: **il file non esisteva affatto**
+(`The system cannot find the file specified`), nonostante lo script
+`startnet.cmd` lo scriva come primissima riga. `dir X:\Windows\System32\startnet.cmd`
+confermava che il file iniettato via wimboot era davvero quello di
+FORGE-AI (contenuto corretto, non un residuo di stock) — quindi non un
+problema di iniezione, ma di **esecuzione**: lo script non era mai
+partito.
+
+## Bug 28 — i driver vengono iniettati nell'immagine "Setup" del boot.wim, che salta interamente startnet.cmd
+
+**Diagnosi**: `dir X:\` mostrava `setup.exe` alla radice della RAM disk
+X: (99.904 byte, datato come l'intero albero `Windows`) — il
+`setup.exe` **nativo** dell'immagine, non quello di FORGE-AI su `I:\`
+(condivisione di rete). `X:\Windows\System32\winpeshl.ini` **non
+esisteva affatto**. Un `boot.wim` di installazione Windows contiene due
+immagini — indice 1 "Microsoft Windows PE", indice 2 "Microsoft Windows
+Setup" — e `wimlib-imagex info` sul file reale confermava
+`Boot Index: 2` nei metadati del WIM: è questo campo (non il file BCD,
+copiato verbatim dall'ISO) a dire a wimboot quale immagine montare come
+X:\ all'avvio. L'immagine "Setup" ha un proprio bootstrap che lancia
+`X:\sources\setup.exe` direttamente, **bypassando interamente**
+`winpeshl.ini`/`startnet.cmd` — comportamento Microsoft nativo, non
+configurabile senza intervenire sul WIM stesso. `inject-drivers.yml`
+(bug preesistente, mai verificato end-to-end prima d'ora) iniettava
+deliberatamente i driver proprio nell'indice 2, con un commento che
+assumeva "l'immagine Setup è quella che avvia l'installer, quindi è lì
+che vanno i driver" — assunzione plausibile ma sbagliata: è l'immagine
+PE (indice 1) quella il cui percorso di avvio esegue
+`startnet.cmd`, e il nostro stesso `startnet.cmd` già lancia
+`setup.exe` come ultimo passo (pattern standard per iniettare driver
+VirtIO in un Setup Windows via WinPE).
+
+**Correzione applicata**: `ansible/roles/windows_winpe/tasks/inject-drivers.yml`
+— il pattern di ricerca dell'indice cambiato da "il nome contiene
+Setup" a "il nome NON contiene Setup" (seleziona l'indice 1), default
+da `'2'` a `'1'`. Aggiunto un nuovo task subito dopo l'iniezione,
+`Set the WinPE image as the WIM's boot index`, che esegue
+`wimlib-imagex info <wim> <indice> --boot` (sintassi verificata con
+`wimlib-imagex info --help` prima di scriverla) per impostare
+esplicitamente l'indice 1 come Boot Index del WIM — senza questo,
+wimboot continuerebbe a montare l'indice 2 indipendentemente da quale
+indice ha ricevuto i driver.
+
+**Verifica**: rigenerato il media (`make prepare-windows-media -e
+winpe_force_rebuild=true`), `poc-windows-01` resettata. Al riavvio, la
+finestra della console mostra per la prima volta
+`X:\windows\system32\cmd.exe - startnet.cmd` con i passi 1-4 in
+esecuzione (driver VirtIO caricati via `drvload`, tutti "Successfully
+loaded" per `viostor.inf`, `vioscsi.inf`, `netkvm.inf`, `balloon.inf`,
+`vioser.inf`; rete inizializzata; mount SMB riuscito; **DiskPart ha
+rilevato Disk 0, lo ha ripulito e convertito con successo in GPT** — il
+sintomo originale, "Install driver to show hardware", è risolto: il
+driver di storage funziona.
+
+## Nota operativa — `make prepare-windows-media`/`provision-windows` non girava non-interattivo senza `--ask-become-pass`
+
+**Non un bug del repository.** Un tentativo di rigenerare il media in
+background è fallito subito: `sudo: a password is required`.
+Verificato (non assunto) che `dsalpietro` non ha NOPASSWD in
+`/etc/sudoers`/`/etc/sudoers.d/` su questo host, e che
+`ansible_become_password` non è definito in nessun vault — il
+funzionamento nelle sessioni precedenti dipendeva da una password sudo
+già "calda" nella cache del terminale interattivo di quel momento, non
+riproducibile in un nuovo processo SSH non interattivo. Corretto
+aggiungendo `--ask-become-pass` a `ANSIBLE_ARGS` e fornendo la password
+tramite lo stesso stdin già usato per `sudo -S` in questa sessione.
+
+**Nota operativa collegata**: trovati due processi `ansible-playbook
+provision-windows.yml` orfani (avviati ~30 minuti prima, residuo di un
+comando lanciato prima di un compattamento della conversazione),
+ancora vivi e potenzialmente in corsa contro la stessa VM/domain XML
+che si stava diagnosticando. Ripuliti con `kill -9` prima di procedere
+— stesso pattern già documentato nella Fase 6 di Ubuntu (bug
+15-23): usare sempre `run_in_background: true` per comandi remoti
+lunghi, mai un timeout locale breve.
+
+## Bug 29 — `7z x` non preserva/imposta il bit di esecuzione Unix, Samba nega l'esecuzione di setup.exe
+
+**Sintomo**: risolto il bug 28, `startnet.cmd` arriva fino al passo
+6/6 ma esce subito: `setup.exe returned control with errorlevel 5`.
+Rilanciando lo stesso comando a mano da una console Shift+F10:
+`I:\setup.exe /unattend:...` → **`Access is denied.`**, esplicito e
+immediato.
+
+**Diagnosi**: `compose/samba/smb.conf`, sezione `[winmedia]`, ha
+`force user = nobody` — ogni accesso alla condivisione, qualunque
+credenziale usi il client Windows, viene forzato all'utente Unix
+`nobody` (uid 65534). Verificato sul filesystem reale (non assunto):
+
+    ls -la /srv/forge-ai/http/windows/media/setup.exe
+      -> -rw-r--r-- 1 root root 99896 ... setup.exe
+
+Permessi `644`: leggibile da chiunque, **eseguibile da nessuno** —
+`nobody` ricade nella classe "other", che non ha il bit `x`. Samba
+mappa fedelmente questo bit Unix mancante in un diniego dell'accesso
+"execute" lato Windows, anche se la lettura semplice (`type`,
+`if exist`, che è quello che le verifiche precedenti dello script
+usavano) funziona senza problemi — da qui il falso senso di "i file ci
+sono e sono raggiungibili" fino al lancio effettivo.
+
+**Causa radice**: `ansible/roles/windows_media/tasks/main.yml`, task
+"Extract the Windows ISO" (`7z x`), non imposta permessi dopo
+l'estrazione. ISO9660/UDF non tracciano un bit di esecuzione Unix, per
+cui 7z estrae tutto con la modalità di default (644) — inclusi i file
+`.exe`.
+
+**Correzione applicata**: `ansible/roles/windows_media/tasks/main.yml`
+— nuovo task "Fix executable permissions lost during extraction" subito
+dopo l'estrazione (`when: forge_windows_extract is changed`):
+`chmod -R a+rX` sull'intero albero estratto più un `find -type f -exec
+chmod a+rx` su ogni file, senza distinguere per estensione (media di
+sola lettura per un guest Windows, nessun rischio a marcare tutto
+eseguibile lato Unix). Applicato anche direttamente sul filesystem reale
+per sbloccare il test in corso senza dover ri-estrarre l'intera ISO
+(`chmod -R a+rX` + `find ... -exec chmod a+rx`), poi verificato che il
+fix nel playbook fosse equivalente prima di fidarsene per il run
+successivo.
+
+**Verifica**: `ls -la setup.exe` dopo il fix → `-rwxr-xr-x`. Rilanciato
+`I:\setup.exe /unattend:...` dalla stessa console: nessun più "Access is
+denied" — il permesso era davvero la causa di quello specifico
+messaggio.
+
+## Bug 30 — `Autounattend.xml` iniettato nel percorso convenzionale confligge con `/unattend:` esplicito
+
+**Sintomo**: risolto il bug 29 (niente più "Access is denied" testuale),
+`setup.exe /unattend:X:\Windows\System32\Autounattend.xml` continua a
+uscire istantaneamente con lo stesso `errorlevel 5`, questa volta senza
+alcun messaggio visibile e senza creare `setupact.log` (solo file di
+telemetria in `X:\Windows\Panther\`, es. `windlp.state.xml`).
+Lanciato **senza** `/unattend` (`I:\setup.exe` da solo): la GUI grafica
+di Setup si apre normalmente — isolando il problema specificamente al
+file di risposta o al suo percorso, non a setup.exe in generale.
+
+**Diagnosi per eliminazione, non per ipotesi sul contenuto XML**: la
+documentazione ufficiale Microsoft
+(learn.microsoft.com/.../windows-setup-command-line-options) conferma
+la sintassi `/Unattend:<answer_file>` corretta e non elenca `5` fra i
+codici di uscita documentati di Setup (tutti gli altri sono valori
+`0xC19...` tipo `MOSETUP_E_*`) — indizio che 5 sia ancora un
+`ERROR_ACCESS_DENIED` Win32 grezzo, stavolta interno a Setup anziché a
+`cmd.exe`. Testato per esclusione, con lo **stesso file, byte per
+byte** (`cp` del file renderizzato reale, non ridigitato a mano):
+
+1. Copiato l'`Autounattend.xml` reale (identico) sulla condivisione
+   `winmedia` e referenziato come `I:\Autounattend-test.xml` →
+   **`errorlevel 0`**, successo completo (compare persino la cartella
+   di staging `NewOs` in Panther, prova di una fase di deployment
+   avanzata).
+2. Ricreato l'intero contenuto originale (tutti e 4 i pass, incluso
+   `DriverPaths`) e ritestato via `I:\` → **`errorlevel 0`** ancora.
+   Il contenuto XML, `DriverPaths` incluso, non è la causa.
+3. Copiato **con `copy` locale** lo stesso file già iniettato da
+   wimboot (`X:\Windows\System32\Autounattend.xml`, quello che fallisce)
+   su un percorso diverso della stessa RAM disk (`X:\test.xml`),
+   nessuna rete coinvolta → **`errorlevel 0`**, successo.
+
+Il file è identico in tutti e quattro i casi (stessa dimensione, stesso
+contenuto), l'unica variabile è il **percorso**. Windows Setup rileva
+automaticamente `\Windows\System32\Autounattend.xml` come posizione
+convenzionale del file di risposta — avere un file lì e passarlo
+*anche* esplicitamente con `/unattend:` genera un conflitto (verosimilmente
+Setup apre/elabora la propria copia auto-rilevata prima che il flag
+esplicito venga onorato) che fa uscire `setup.exe` immediatamente con
+errorlevel 5, prima ancora che venga scritto `setupact.log`.
+
+**Correzione applicata**:
+`ansible/templates/ipxe/host-windows-install.ipxe.j2` — l'argomento
+cmdline passato a wimboot per l'iniezione del file di risposta cambiato
+da `Autounattend.xml` a `forge-unattend.xml` (il nome sorgente sull'host
+resta `Autounattend.xml`, cambia solo il nome con cui wimboot lo
+inietta in `\Windows\System32\` dentro l'immagine). `ansible/templates/windows/startnet.cmd.j2`
+— il flag `/unattend:` aggiornato di conseguenza a
+`X:\Windows\System32\forge-unattend.xml`, evitando così il percorso
+auto-rilevato.
+
+**Verifica**: `make provision-windows` rilanciato con entrambi i fix
+(28+30) e permessi (29) corretti sul filesystem reale, in attesa
+dell'esito end-to-end completo al momento in cui questo paragrafo è
+stato scritto — vedi il resoconto finale più sotto per il risultato.

@@ -89,14 +89,26 @@
 
 - name: Find the WinPE image index inside boot.wim
   # A Windows installation boot.wim holds two images: index 1 is
-  # "Microsoft Windows PE", index 2 is "Microsoft Windows Setup". The
-  # Setup image is the one that actually boots into the installer, so
-  # that is the one the drivers must go into.
+  # "Microsoft Windows PE", index 2 is "Microsoft Windows Setup". Bug 28
+  # (docs/logbook/06-fase6-provisioning-windows.md): the Setup image's
+  # own WIM metadata carries "Boot Index: 2", which is what tells
+  # wimboot which image to mount as X:\ -- and the Setup image has no
+  # \Windows\System32\winpeshl.ini at all, confirmed on a live console
+  # via Shift+F10 during Setup. Without winpeshl.ini, X:\sources\setup.exe
+  # is what actually runs, and startnet.cmd -- however correctly staged
+  # -- never executes: no forge-ai.log is ever created, drvload never
+  # runs, and Setup reaches its disk-selection screen with no storage
+  # driver loaded ("Install driver to show hardware"). The plain
+  # "Microsoft Windows PE" image (index 1) is the one whose normal boot
+  # path runs winpeshl.ini/startnet.cmd, so that is the one that must
+  # both receive the drivers and become the WIM's boot index -- ending,
+  # as before, with startnet.cmd itself launching setup.exe from the
+  # mapped network share as its last step.
   ansible.builtin.shell:
     cmd: |
       set -o pipefail
       wimlib-imagex info "{{ storage.http_root }}/windows/boot-forge.wim" \
-        | awk '/^Index:/{idx=$2} /^Name:/{ if ($0 ~ /Setup/) { print idx; exit } }'
+        | awk '/^Index:/{idx=$2} /^Name:/{ if ($0 !~ /Setup/) { print idx; exit } }'
     executable: /bin/bash
   become: true
   changed_when: false
@@ -105,14 +117,16 @@
 
 - name: Select the WinPE image index
   ansible.builtin.set_fact:
-    forge_winpe_image_index: "{{ forge_winpe_index.stdout | trim | default('2', true) or '2' }}"
+    forge_winpe_image_index: "{{ forge_winpe_index.stdout | trim | default('1', true) or '1' }}"
   tags: [windows, media]
 
 - name: Report the selected WinPE image
   ansible.builtin.debug:
     msg: >-
       Injecting drivers into boot.wim image index {{ forge_winpe_image_index }}
-      (the Windows Setup image, not the bare WinPE image).
+      (the plain WinPE image, whose boot path runs startnet.cmd -- not
+      the Setup image, which launches setup.exe directly and never
+      touches startnet.cmd; see bug 28 in the logbook).
   tags: [windows, media]
 
 - name: Inject the VirtIO drivers into the WinPE image  # noqa: no-handler
@@ -130,6 +144,24 @@
   when: forge_wim_copied is changed
   register: forge_wim_injected
   changed_when: forge_wim_injected.rc == 0
+  tags: [windows, media]
+
+- name: Set the WinPE image as the WIM's boot index  # noqa: no-handler
+  # Not a handler: must follow the injection within this run. wimboot mounts whichever image the WIM's own "Boot
+  # Index" metadata names, independently of which index was just
+  # updated above -- confirmed by inspecting boot.wim before this fix
+  # (wimlib-imagex info reported "Boot Index: 2" out of the box, i.e.
+  # the Setup image, which is what produced bug 28).
+  ansible.builtin.command:
+    argv:
+      - wimlib-imagex
+      - info
+      - "{{ storage.http_root }}/windows/boot-forge.wim"
+      - "{{ forge_winpe_image_index }}"
+      - --boot
+  become: true
+  when: forge_wim_copied is changed
+  changed_when: true
   tags: [windows, media]
 
 - name: Verify the drivers are present inside the image
