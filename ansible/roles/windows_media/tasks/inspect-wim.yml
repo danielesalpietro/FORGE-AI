@@ -21,7 +21,11 @@
   # allowed") before this task's own regex_replace ever gets a chance to
   # run -- confirmed on real hardware, and by inspecting the raw output
   # with `file`/`xxd` (UTF-16 little-endian, BOM FF FE).
-  ansible.builtin.shell: "wimlib-imagex info {{ forge_windows_install_image | quote }} --xml | iconv -f UTF-16 -t UTF-8"
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      wimlib-imagex info {{ forge_windows_install_image | quote }} --xml | iconv -f UTF-16 -t UTF-8
+    executable: /bin/bash
   become: true
   changed_when: false
   register: forge_wim_xml
