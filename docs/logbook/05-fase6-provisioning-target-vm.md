@@ -617,3 +617,56 @@ qemu-agent-command` con `guest-exec` / `guest-exec-status` —
 
 **Verifica**: `ssh -i ~/.ssh/forge-ai-poc forgeops@192.168.250.21
 'sudo -n whoami'` -> `root`, senza alcun prompt di password.
+
+## Conferma finale — `make provision-ubuntu` pulito, end-to-end, senza intervento manuale
+
+Dopo il fix del bug 23, un'unica esecuzione pulita di `make
+provision-ubuntu` (nessun processo concorrente, verificato prima di
+lanciarla) completa per intero, incluso il passaggio che aveva appena
+fallito:
+
+    TASK [Wait for the SSH service to accept a connection] --- 7.41s (prima: timeout dopo 919s)
+    TASK [Wait for SSH on every installed host] -------------- 10.75s
+    TASK [Gather the facts] ----------------------------------- 3.12s
+
+    PLAY RECAP
+    forge-control    : ok=55  changed=6  failed=0  skipped=9
+    poc-ubuntu-01    : ok=6   changed=0  failed=0  skipped=0
+
+    EXIT_CODE=0
+
+Nessun intervento manuale (`send-key`, `qemu-agent-command`) è stato
+necessario in questa run: boot da PXE, dispatch dello stato,
+(re-)installazione se necessaria, ordine di boot verso il disco,
+attesa SSH e raccolta dei fact Ansible funzionano tutti da soli,
+guidati solo da `config/poc.yml` e dal playbook.
+
+## Riepilogo — bug 15-23 (Fase 6, provisioning di `poc-ubuntu-01`)
+
+| # | Sintomo | Causa reale | File |
+|---|---------|-------------|------|
+| 15 | dnsmasq in restart-loop | `CAP_SETPCAP` mancante per il proprio `capset()` interno | `forge-dnsmasq.service.j2` |
+| 16 | Permission denied sul lease file | `dhcp-leasefile` in una dir non scrivibile da root senza `CAP_DAC_OVERRIDE` | `provisioning.conf.j2` |
+| 17 | TFTP/DHCP falliscono ancora dopo 15-16 | Qualunque direttiva di hardening con filtro seccomp rompe il `capset()` di dnsmasq | `forge-dnsmasq.service.j2` |
+| 18 | TFTP rifiuta i file root-owned | dnsmasq droppa il proprio UID a `nobody` una volta che `capset()` funziona | `provisioning.conf.j2` (`user=root`) |
+| 19 | Script iPXE si interrompe subito dopo il banner | `echo` con un divisore di soli trattini letto come opzione sconosciuta | `boot.ipxe.j2` |
+| 20 | `params: command not found` | Questo build di iPXE non include la feature forms-POST | `boot.ipxe.j2` |
+| 21 | Fetch dell'ISO (3.3GB) si blocca sempre a ~1.8GB | 4096 MB RAM insufficienti per il tmpfs di staging di casper | `config/poc.yml`, `config/poc.example.yml` |
+| 22 | "No such device" avviando dal disco locale | `sanboot --drive 0x80` è una tecnica BIOS/legacy, non valida su guest UEFI | `app.py`, `boot.ipxe.j2`, `menu.ipxe.j2` |
+| 23 | Ansible non riesce a fare `become` sull'host installato | Utente di automazione senza sudo NOPASSWD | `user-data.j2` |
+
+Più una correzione operativa non di codice: sette processi
+`ansible-playbook` orfani ripuliti con `pkill`, causati da chiamate
+locali con timeout breve senza `run_in_background`.
+
+**Stato raggiunto**: `poc-ubuntu-01` è il primo host FORGE-AI mai
+installato **e avviato** con successo su hardware reale, in modo
+completamente automatico via `make provision-ubuntu`. Snapshot di
+checkpoint fatto su `forge-poc-host-2` (VM ID 8 su ESXi,
+`poc-ubuntu-01-installed-bug15-23`, figlio di `post-bootstrap-25dfff8`).
+
+**Prossimi passi non ancora affrontati**: `poc-windows-01` (Windows
+Server) resta da provisionare; `make configure`,
+`make validate-deployment`, `make smoke-test`, prova di idempotenza,
+drift detection/reconciliation — tutti ancora da eseguire per la
+prima volta su questo host.
