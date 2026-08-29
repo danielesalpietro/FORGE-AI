@@ -232,3 +232,17 @@ hanno comunque un display prima che carichi qualunque driver GPU.
 Linux resta su `virtio` (già collaudato su `poc-ubuntu-01`). Nessun
 altro riferimento a `qxl` nel repository (verificato con una ricerca
 mirata).
+
+**Errore autoinflitto (mio, non un bug di sessioni precedenti)**: il
+primo tentativo di applicare questo fix ha inserito un commento
+esplicativo nel template XML contenente doppi trattini letterali
+(`... does not have -- libvirt refuses ...`) — non validi dentro un
+commento XML, esattamente lo stesso errore già capitato due volte in
+sessioni precedenti su questo stesso file (vedi
+`docs/ESXI-OUTER-VM-CHECKLIST.md`). `vm_lifecycle : Render the domain
+XML` ha fallito la validazione (`msg: failed to validate`, `parser
+error : Double hyphen within comment`) dopo che il controllo del disco
+qcow2 (231s, genuinamente attivo per tutto il tempo, confermato con
+`ps aux`/CPU time in crescita costante — non uno stallo) era finalmente
+terminato. Corretto sostituendo i doppi trattini con due punti nel
+commento, senza toccare la logica.
