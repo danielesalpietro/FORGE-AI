@@ -133,11 +133,17 @@
   tags: [windows, media]
 
 - name: Verify the drivers are present inside the image
+  # wimlib-imagex dir prints Unix-style forward slashes ("/Windows/..."),
+  # not the backslashes Windows itself would show -- confirmed on real
+  # output (`wimlib-imagex dir boot-forge.wim 2 | grep -i forge` lists
+  # /Windows/System32/drivers/forge/viostor.inf and friends). A pattern
+  # written with literal backslashes never matches, so this always
+  # reported zero files even when injection succeeded.
   ansible.builtin.shell:
     cmd: |
       set -o pipefail
       wimlib-imagex dir "{{ storage.http_root }}/windows/boot-forge.wim" "{{ forge_winpe_image_index }}" \
-        | grep -ci '\\Windows\\System32\\drivers\\forge\\.*\.inf' || true
+        | grep -ci '/Windows/System32/drivers/forge/.*\.inf' || true
     executable: /bin/bash
   become: true
   changed_when: false

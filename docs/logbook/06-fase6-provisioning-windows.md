@@ -116,3 +116,64 @@ modulo `get_url` di Ansible scrive su un file temporaneo prima del
 rename finale, quindi un fallimento a metà non lascia un file
 troncato al suo posto). Ripetuto `make provision-windows` da capo con
 una connessione TCP nuova.
+
+Il secondo tentativo (con una connessione pulita) ha scaricato
+virtio-win.iso senza intoppi (verificato con `/proc/<pid>/io`: byte
+scritti in crescita costante, non più fermi) ed è arrivato molto più
+avanti — fino al bug 25.
+
+## Bug 25 — verifica dell'iniezione driver cerca backslash, wimlib-imagex stampa slash
+
+**Sintomo**: `make provision-windows` fallisce per la prima volta su un
+task Windows-specifico più a fondo del bug 24:
+
+    TASK [windows_winpe : Assert the driver injection succeeded]
+    [ERROR]: Task failed: Action failed: No .inf files found under
+              \Windows\System32\drivers\forge inside
+              /srv/forge-ai/http/windows/boot-forge.wim.
+
+**Diagnosi**: prima ipotesi (i path sorgente `driver_paths` in ordine
+sbagliato, es. `viostor/2k25/amd64` invece di `amd64/2k25/viostor`)
+scartata verificando la struttura reale della ISO virtio-win estratta:
+`find .../virtio/viostor -maxdepth 4` conferma che
+`viostor/2k25/amd64/viostor.inf` esiste davvero (la ISO contiene
+**entrambe** le strutture, indicizzata sia per driver che per
+architettura). L'output del task "Show what was staged" conferma
+inoltre che lo staging **ha funzionato**: "collected 6 driver
+directories", con `balloon.inf`, `netkvm.inf`, `viostor.inf` ecc.
+elencati per nome.
+
+Verificato quindi **dove sono finiti davvero** i file dentro il WIM,
+invece di continuare a ipotizzare, con lo stesso comando che il
+messaggio di errore stesso suggerisce:
+
+    wimlib-imagex dir boot-forge.wim 2 | grep -i forge
+      -> /Windows/System32/drivers/forge/viostor.inf   (e altri 5 .inf)
+
+**I file ci sono, al posto giusto** — ma con **slash normali**
+(`/Windows/...`), non i backslash che il pattern di verifica si
+aspettava (`\\Windows\\System32\\drivers\\forge\\.*\.inf`, scritto
+per un path in stile Windows). `wimlib-imagex dir` stampa sempre con
+slash Unix, indipendentemente dal fatto che il contenuto sia
+un'immagine Windows. Confermato isolando i due pattern uno per uno
+contro lo stesso output reale: quello con backslash trova 0
+corrispondenze, quello con slash normali ne trova 6 — la stessa
+identica lista di file.
+
+**L'iniezione dei driver funzionava correttamente fin dall'inizio**:
+il bug era solo nella regex della verifica, un falso negativo che
+interrompeva la pipeline nonostante il lavoro reale fosse già
+riuscito.
+
+**Correzione applicata**: `ansible/roles/windows_winpe/tasks/inject-drivers.yml`
+— il pattern grep della "Verify the drivers are present inside the
+image" cambiato da `'\\Windows\\System32\\drivers\\forge\\.*\.inf'` a
+`'/Windows/System32/drivers/forge/.*\.inf'`. Nessun'altra occorrenza
+di `wimlib-imagex dir` nel repository (verificato con una ricerca
+mirata) da correggere allo stesso modo.
+
+**Nota**: il file `boot-forge.wim` prodotto da questo run fallito
+contiene già i driver correttamente iniettati (verificato a mano) — al
+prossimo tentativo la copia/iniezione verrà saltata perché il file
+esiste già (`when: forge_wim_copied is changed`), ma la verifica ora
+corretta troverà i driver reali già presenti e passerà.
