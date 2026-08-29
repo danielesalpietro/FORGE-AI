@@ -85,10 +85,21 @@ rem    block in Autounattend.xml exactly. Setup would do this itself,
 rem    but a pre-wipe makes reruns deterministic: a leftover ESP from a
 rem    previous attempt is the single most common cause of a silent
 rem    "Windows cannot be installed to this disk".
+rem
+rem    online/attributes clear readonly come before clean: a disk that
+rem    already carries a partition table from an earlier attempt on
+rem    this same host can come up offline or read-only, and "clean"
+rem    itself refuses to run on such a disk ("Virtual Disk Service
+rem    error: The operation is not allowed on a disk that is
+rem    offline."), confirmed on a real rerun in this environment. Both
+rem    commands are harmless no-ops on a disk that is already online
+rem    and writable.
 rem -------------------------------------------------------------------
 echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
 (
   echo select disk 0
+  echo online disk
+  echo attributes disk clear readonly
   echo clean
   echo convert gpt
 ) > X:\forge-diskpart.txt

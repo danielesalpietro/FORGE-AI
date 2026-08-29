@@ -443,7 +443,105 @@ inietta in `\Windows\System32\` dentro l'immagine). `ansible/templates/windows/s
 `X:\Windows\System32\forge-unattend.xml`, evitando così il percorso
 auto-rilevato.
 
-**Verifica**: `make provision-windows` rilanciato con entrambi i fix
-(28+30) e permessi (29) corretti sul filesystem reale, in attesa
-dell'esito end-to-end completo al momento in cui questo paragrafo è
-stato scritto — vedi il resoconto finale più sotto per il risultato.
+**Correzione della correzione**: il primo tentativo di questo fix
+cambiava solo l'ultimo token della riga `imgfetch` (il "cmdline"
+passato all'immagine), lasciando `--name Autounattend.xml` invariato —
+e un riavvio reale ha mostrato che è **`--name`**, non il token finale,
+a determinare il nome con cui wimboot inietta il file
+(`dir X:\Windows\System32\*.xml` sulla console mostrava ancora
+`Autounattend.xml`, 14.355 byte, mai `forge-unattend.xml`). Con questo
+mismatch, `startnet.cmd` puntava `/unattend:` a un file che non
+esisteva affatto, e Setup mostrava una finestra di dialogo esplicita:
+"The installation process was launched with an invalid command line
+argument." Corretto cambiando anche `--name` in `forge-unattend.xml`
+nello stesso task; verificato di nuovo sulla console che il file
+iniettato ora si chiama davvero così.
+
+## Bug 31 — `diskpart` fallisce su un disco lasciato offline/read-only da un tentativo precedente
+
+**Sintomo**: in una sessione con molti tentativi di installazione
+interrotti sullo stesso disco qcow2, `[4/6] diskpart` ha fallito con:
+
+    Virtual Disk Service error: The operation is not allowed on a disk
+    that is offline.
+
+**Diagnosi**: lo script diskpart di `startnet.cmd.j2` faceva solo
+`select disk 0` / `clean` / `convert gpt`, assumendo il disco sempre
+online e scrivibile. Un disco che ha già visto un tentativo di
+partizionamento/installazione precedente su questo stesso host può
+tornare a un riavvio successivo con l'attributo "offline" o "readonly"
+impostato — un comportamento Windows normale per i dischi con una
+firma già nota — e in quello stato `clean` stesso si rifiuta di
+partire.
+
+**Correzione applicata**: `ansible/templates/windows/startnet.cmd.j2`
+— aggiunti `online disk` e `attributes disk clear readonly` allo
+script diskpart, prima di `clean`. Entrambi i comandi sono no-op
+innocui su un disco già online e scrivibile, quindi non cambiano nulla
+per il caso comune (primo tentativo, disco vergine).
+
+**Verifica**: ri-renderizzato via `make prepare-windows-media`,
+riavviata `poc-windows-01`: il log mostra ora "DiskPart successfully
+onlined the selected disk." e "Disk attributes cleared successfully."
+prima delle righe di clean/convert già viste in precedenza, ed è la
+prima volta in questa sessione che il passo 4/6 supera un disco
+precedentemente scritto senza intervento manuale.
+
+## Nota operativa — la condivisione SMB `winmedia` smette di rispondere alla VM dopo molti reset ravvicinati
+
+**Non ancora root-causata con certezza — segnalata come limite noto,
+non corretta nel repository.** Dopo i fix di bug 28/29/30/31, diversi
+riavvii consecutivi di `poc-windows-01` (via `virsh reset`/`destroy`+
+`start`, decine di volte in questa sessione per isolare i bug sopra)
+hanno mostrato `[3/6] net use` fallire di nuovo con `System error 53
+... The network path was not found`, nonostante:
+
+  - `ping 192.168.250.1` dalla console WinPE avesse sempre successo
+    (0% loss);
+  - `smbclient -N -L //192.168.250.1` dall'outer host avesse **sempre**
+    avuto successo, in ogni momento in cui è stato controllato;
+  - un riavvio del container `forge-winmedia`
+    (`docker compose ... restart winmedia`) risolvesse il sintomo
+    immediatamente — il tentativo di boot successivo montava la
+    condivisione senza errori — ma il sintomo si ripresentava dopo
+    altri reset ravvicinati della VM.
+
+Ipotesi più plausibile, non confermata: i miei stessi `virsh
+reset`/`destroy` ripetuti troncano la sessione TCP della VM verso
+`smbd` in modo brusco (nessun logoff SMB pulito), e qualche stato
+lato-server (una entry di lock, una voce di connection-tracking) resta
+non ripulito abbastanza in fretta da bloccare il tentativo successivo.
+`smbstatus` dentro il container, controllato durante un fallimento
+attivo, non mostrava alcuna connessione dalla VM (192.168.250.22) — solo
+una dall'host stesso — a indicare che il pacchetto SYN della VM non
+arriva mai fino a `smbd`, non che `smbd` lo rifiuti esplicitamente.
+Verificato che le regole iptables DNAT/FORWARD per la porta 445 esistono
+e hanno contatori di pacchetti diversi da zero, ma non è stato
+possibile catturare un pacchetto della VM in tempo reale per confermare
+dove si perde esattamente.
+
+**Non è un pattern realistico per un'installazione reale**: un
+operatore che segue il flusso normale (`make provision-windows` una
+volta, attesa dei 15-30 minuti) non genera mai decine di reset
+ravvicinati sulla stessa VM nell'arco di un'ora come ha fatto questa
+sessione diagnostica. Segnalato qui per completezza e per chi si
+imbattesse nello stesso sintomo durante un debug intensivo: la
+soluzione immediata è riavviare `winmedia` prima del tentativo
+successivo.
+
+## Stato finale di questa sessione
+
+Bug 28, 29, 30 (e la sua correzione) e 31 tutti corretti, ciascuno
+verificato singolarmente su console reale con evidenza diretta (log di
+`drvload`, assenza di "Access is denied", nome file iniettato
+confermato via `dir`, "DiskPart successfully onlined..."). Non è stato
+ancora osservato un run completo `make provision-windows` che superi
+*tutti* i passi in sequenza in un colpo solo, a causa della flakiness
+SMB intermittente descritta sopra, che ha interrotto gli ultimi
+tentativi al passo 3/6 nonostante i passi successivi (4/6, 6/6) fossero
+già stati verificati funzionanti singolarmente in tentativi precedenti
+nella stessa sessione. Il prossimo passo naturale è ripetere `make
+provision-windows` con un `winmedia` appena riavviato e senza reset
+manuali intermedi, lasciando che il ciclo naturale di retry
+dell'installer (fino a 3 tentativi) assorba un'eventuale flakiness
+isolata.
