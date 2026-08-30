@@ -337,3 +337,43 @@ Rilancio (commit ff6977b): container state ricostruito (probe
 conferma `exit 1` nello script servito), winmedia riavviata
 preventivamente (share verificate), VM distrutta, `make
 provision-windows` in background. Esito al prossimo aggiornamento.
+
+## 2026-08-30 — Tentativo di rilancio 1: tre agguati WinPE prima ancora di setup (bug 38-39-40); rilancio 2 su disco vergine
+
+Il primo rilancio post-fix non è arrivato a testare né l'`exit 1` né
+lo specialize: si è fermato in WinPE con il dialogo di Setup **"It
+looks like you started an upgrade"**. Diagnosi dal log `X:\forge-ai.log`
+(letto in console via Shift+F10; l'upload via `/api/log` è fallito
+perché richiede il token e il curl manuale non lo aveva):
+
+- **Bug 38 — `diskpart /s` abortisce l'intero script al primo errore.**
+  Il disco sporco del run precedente è arrivato in WinPE già online:
+  `online disk` ha alzato un errore VDS ("This disk is already
+  online") e diskpart ha mollato lì — `clean`/`convert gpt`/`format`
+  mai eseguiti. Setup ha trovato la mezza installazione precedente →
+  dialogo upgrade. Il commento nel template sosteneva che
+  online/readonly fossero "no-op innocui su disco già online":
+  falsificato. Fix: due script separati — prep best-effort
+  (online/readonly, errori accettabili) poi wipe rigoroso.
+- **Bug 39 — `timeout.exe` non esiste in WinPE** ("'timeout' is not
+  recognized"): le due attese (post-diskpart e retry di setup)
+  diventano `ping -n` su localhost.
+- **Bug 40 (osservazione, non ancora corretto) — `curl.exe` assente in
+  questa build WinPE**: la callback `[5/6] state=installing` non parte
+  mai (il ramo else lo logga onestamente). Lo stato si muove comunque
+  via dispatch; da valutare se aggiungere curl a WinPE o eliminare il
+  passo.
+
+Prima del rilancio anche: fix `get_checksum: false` sulla stat del
+disco in vm_lifecycle (lo stat di default SHA1-hasha l'intero qcow2:
+6+ minuti di apparente "hang" su un'immagine da 80 GB cresciuta col
+mezzo install). Nota operativa: `pkill -f` col pattern nudo ha ucciso
+la propria stessa sessione SSH (il pattern matchava la command line
+remota) — trucco `[.]` per i prossimi.
+
+Rilancio 2 (tentativo #2 dei 3-4 concordati con Daniele): VM
+distrutta, **qcow2 cancellato** (disco vergine: elimina l'intera
+classe dirty-disk e rende istantaneo il check), 216/216 test verdi,
+`make provision-windows` in background alle ~14:50Z. Limite di tempo
+concordato: se non verde entro ~2 ore o fallimento su cosa nuova →
+pivot parallelo su ESXi-direct (fase 0.2, issue #7).
