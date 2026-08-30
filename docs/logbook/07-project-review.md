@@ -284,3 +284,56 @@ Nel frattempo: selezionata manualmente la voce Windows Boot Manager
 dell'invio). Windows è ripartito da disco — **"Installing 42% — Your
 computer may restart a few times"** — la fase offline del setup
 moderno prosegue. Stato: `installing`, attempts=1, local_boots=1.
+
+## 2026-08-30 — Bug 36 confermato dall'esperimento passivo; bug 37 (specialize) diagnosticato dai log Panther; doppio fix e rilancio
+
+**Bug 36 confermato reale.** Il secondo riavvio di metà installazione
+(10:49:59Z, `dispatch-local-mid-install 2/3`) è avvenuto in
+osservazione puramente passiva — nessun tasto inviato da nessuno — e
+la VM è ricaduta comunque nel menu firmware. Non era interferenza
+dell'operatore. Causa trovata nella documentazione iPXE (discussion
+789): `exit` senza status ritorna EFI_SUCCESS, e BdsDxe interpreta
+"boot option riuscita" → smette di scorrere la boot order e mostra il
+menu. `exit 1` ritorna un errore, che è ciò che fa proseguire il
+firmware alla voce successiva (hd/WBM). Fix applicato in
+`script_local()` (state service), `boot.ipxe.j2` e `menu.ipxe.j2` —
+gli ultimi due erano lo stesso bug latente mai innescato.
+
+**Bug 37 — i comandi specialize da 400+ caratteri invalidano l'intero
+answer file.** Al boot manuale su WBM l'installazione è proseguita
+(42% offline) ma è morta con il dialogo "The computer restarted
+unexpectedly" (windeploy 0x1f). Shift+F10 sul dialogo →
+`C:\Windows\Panther\UnattendGC\setuperr.log` e
+`C:\Windows\Panther\setuperr.log` letti a schermo: il validatore SMI
+della fase specialize boccia i `RunSynchronousCommand/Path` degli
+Order 3, 4 e 5 ("Value is invalid", dump da 846 byte ≈ 423 caratteri
+UTF-16 — i one-liner curl-con-fallback-powershell), dichiara
+`unattend.xml is not a valid unattended Setup answer file` e
+l'installazione abortisce. Gli Order 1 e 2, corti, passavano. Nota di
+metodo: era la prima volta in assoluto che il flusso raggiungeva la
+fase specialize, coerente col fatto che il bug emerga solo ora. Il
+timestamp nel log (03:48:33, fuso del guest) colloca l'errore già al
+PRIMO boot locale: il riavvio 2/3 era il reboot d'errore di windeploy.
+
+Fix: un solo RunSynchronousCommand corto (~200 caratteri renderizzati)
+che scarica ed esegue `specialize.cmd`, servito per-host accanto a
+SetupComplete.cmd; tutta la logica (mkdir, staging dei due script,
+callback installed, spedizione del log al boot server) vive nello
+script. Chiusura con `exit /b 0`: un download transitoriamente fallito
+non deve abortire l'intera installazione — senza script il playbook va
+in timeout con diagnosi precisa, che è meglio di un half-install non
+avviabile. Tre test nuovi: guardia di lunghezza (<259) su tutti i
+Path, contenuto del wrapper, contenuto di specialize.cmd. **215/215
+verdi.**
+
+Decisione concordata con Daniele (che spingeva, ragionevolmente, per
+un test pulito diretto su ESXi visti i due giorni di grind): il bug 37
+è nel file di risposta, non nell'ambiente — su ESXi sarebbe fallito
+identico. Quindi: fix + UN rilancio nested; se fallisce su qualcosa di
+nuovo, pivot immediato alla fase 0.2 (issue #7) con l'answer file
+ormai corretto.
+
+Rilancio (commit ff6977b): container state ricostruito (probe
+conferma `exit 1` nello script servito), winmedia riavviata
+preventivamente (share verificate), VM distrutta, `make
+provision-windows` in background. Esito al prossimo aggiornamento.
