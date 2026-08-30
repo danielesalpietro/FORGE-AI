@@ -605,16 +605,103 @@ Elementi noti che lo distinguono dai bug già risolti:
      conflitti rilevamento-automatico/flag-esplicito, non solo il caso
      già corretto.
 
-## Stato finale di questa sessione
+## Ipotesi 4 testata — consegna via CD-ROM virtuale implementata; il bug 32 persiste identico
 
-Bug 28, 29, 30 (e la sua correzione) e 31 tutti corretti e verificati
-singolarmente con evidenza diretta su console reale, e per la prima
-volta confermati funzionare **insieme** nello stesso avvio (tentativo
-2/3, vedi sopra). Bug 32 resta aperto: `setup.exe` viene raggiunto e
-lanciato correttamente ma esce con `0xC190011F` prima di scrivere
-`setupact.log`, causa non ancora isolata. La condivisione SMB
-`winmedia` resta un limite operativo noto sotto reset ravvicinati
-ripetuti (vedi nota sopra), mitigato riavviando il container prima di
-ogni nuovo tentativo pulito. Prossimo passo naturale: le tre ipotesi
-elencate sopra per bug 32, a partire dalla n. 1 (il test di isolamento
-più economico e già collaudato in questa sessione).
+Su indicazione di Daniele (con priorità sull'ipotesi 4 rispetto al
+"Test A" di isolamento), la consegna dell'answer file è stata
+**riprogettata e implementata per intero**:
+
+  - `windows_unattend`: nuovo task che costruisce
+    `<host>-unattend.iso` con `genisoimage` (Joliet, nome lungo
+    `Autounattend.xml` alla radice — verificato con `isoinfo -J -l`);
+  - `domain.xml.j2`: nuovo device `<disk device="cdrom">` (`sdc`,
+    bus SATA) che monta quella ISO, controllato dalla variabile
+    `windows_attach_unattend_cdrom` (default `true`);
+  - `set-boot-order.yml`: il flag passa a `false` quando l'host
+    riporta "installed" — il disco si stacca a fine installazione,
+    simmetrico alla purge HTTP;
+  - `purge.yml`: nuovo task che elimina anche il file `.iso`;
+  - `startnet.cmd.j2`: **rimosso del tutto il flag `/unattend:`** —
+    Setup deve trovare il file da solo sul CD-ROM (rilevamento
+    automatico standard, la modalità per cui il meccanismo è
+    progettato e testato da Microsoft);
+  - `host-windows-install.ipxe.j2`: rimossa l'iniezione wimboot
+    dell'answer file (resta solo `startnet.cmd`);
+  - `docs/SECURITY.md` e il test
+    `test_windows_install_script_fetches_the_wimboot_file_set`
+    aggiornati di conseguenza. Nel passaggio corretti anche tre test
+    preesistenti che asserivano ancora `sanboot` (obsoleti dal bug 22
+    e mai aggiornati). Lint e suite pytest verdi (unico rosso
+    residuo: il gap preesistente di copertura del template motd, non
+    correlato).
+
+Nota: durante l'implementazione, un commento esplicativo con `--`
+letterale in `domain.xml.j2` ha rotto di nuovo la validazione XML —
+**quarta occorrenza dello stesso errore autoinflitto su questo stesso
+file** (vedi `docs/ESXI-OUTER-VM-CHECKLIST.md`). Trovato dai test,
+corretto sostituendo con `:`.
+
+**Esito sul campo**: il dominio ridefinito monta correttamente la
+ISO (visibile in `virsh dumpxml` dopo un power-cycle completo — una
+ridefinizione non aggiunge device a una VM già accesa), ma al boot
+successivo `setup.exe` è uscito con **lo stesso identico
+`0xC190011F`**, sia nel run automatico sia rilanciandolo a mano, con
+o senza answer file raggiungibile. Conclusione netta e definitiva:
+**il bug 32 non è mai stato legato all'answer file né al suo
+meccanismo di consegna** — esattamente il dubbio metodologico
+sollevato dalla seconda analisi esterna ("state cambiando
+l'architettura di consegna senza aver dimostrato che il file è la
+causa"). La migrazione a CD-ROM resta comunque acquisita come
+miglioramento architetturale (elimina strutturalmente la classe di
+bug 28/30 e toglie l'answer file, con la password codificata, dalla
+rete di provisioning).
+
+## Bug 32, seconda campagna di isolamento — un pattern legato al riavvio del ciclo, non al tempo
+
+Test A (setup.exe puro, nessun answer file da nessuna parte,
+`I:\setup.exe` senza argomenti) eseguito più volte sulla stessa
+sessione WinPE con risultati **incoerenti tra loro**:
+
+  - **primo lancio** dopo diskpart: fallisce sempre, `0xC190011F`,
+    nessun `setupact.log`;
+  - un **rilancio manuale** minuti dopo (stessa RAM disk, stesso
+    disco, stessa rete): a volte apre la GUI "Windows Server Setup"
+    con `errorlevel 0`, a volte restituisce `errorlevel 0` senza che
+    nessuna finestra compaia, a volte serve un terzo lancio;
+  - su questa osservazione è stato aggiunto a `startnet.cmd.j2` un
+    **retry loop** (3 tentativi): prima con 5 s di pausa (tutti e 3 i
+    tentativi falliti identici), poi con 60 s (di nuovo tutti e 3
+    falliti) — mentre un lancio manuale dopo un'attesa comparabile
+    sulla stessa sessione riusciva. Il tempo di attesa da solo non è
+    quindi la variabile determinante, o non l'unica: qualcosa
+    distingue i lanci del retry-loop batch dai lanci manuali da
+    console interattiva, non ancora identificato (ambiente del
+    processo? sessione console? stato lasciato dal primo setup.exe
+    nel job batch?).
+
+Il retry loop resta nello script come mitigazione parziale (male non
+fa: se Setup riesce riavvia la macchina e il codice successivo non
+gira mai), ma **non è una soluzione affidabile** e non va considerato
+tale.
+
+## Stato finale della sessione (aggiornato)
+
+- Bug 28, 29, 30, 31: **risolti e verificati**, singolarmente e
+  insieme nello stesso avvio. Catena PXE → iPXE → wimboot → WinPE →
+  drvload → rete → mount SMB → diskpart: **tutta funzionante**.
+- Consegna answer file migrata da iniezione wimboot a CD-ROM
+  virtuale: **implementata, testata, acquisita** (e con essa
+  l'esclusione definitiva dell'answer file dalle cause del bug 32).
+- Bug 32: **aperto, non risolto**. `setup.exe` (build 26100.32230,
+  Windows Server 2025, eseguito da share SMB in WinPE) esce con
+  `0xC190011F` prima di scrivere qualunque log; i rilanci hanno esito
+  non deterministico. Il segnale è troppo incoerente per continuare a
+  testare variazioni di timing alla cieca su hardware reale.
+- Flakiness SMB `winmedia` sotto reset ravvicinati: limite operativo
+  noto, mitigato dal riavvio del container.
+- Alternativa più promettente non ancora tentata, suggerita dalla
+  seconda analisi esterna: abbandonare `setup.exe` in favore di
+  **`dism /apply-image` + `bcdboot`** (il metodo dei deployment
+  enterprise MDT/SCCM) — bypassa per intero il componente che
+  fallisce, a fronte di un redesign del passo 6 di startnet.cmd e
+  della gestione della configurazione post-apply.
