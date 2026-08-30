@@ -73,9 +73,11 @@ PER_HOST: dict[str, str | None] = {
     "ubuntu/vendor-data.j2": "linux",
     "ipxe/host-ubuntu-install.ipxe.j2": "linux",
     "windows/Autounattend.xml.j2": "windows",
+    "windows/specialize.cmd.j2": "windows",
     "windows/SetupComplete.cmd.j2": "windows",
     "windows/Configure-WinRM.ps1.j2": "windows",
     "windows/startnet.cmd.j2": "windows",
+    "windows/winpeshl.ini.j2": "windows",
     "ipxe/host-windows-install.ipxe.j2": "windows",
     "libvirt/domain.xml.j2": None,          # every host
 }
