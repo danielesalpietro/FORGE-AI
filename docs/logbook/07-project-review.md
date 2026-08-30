@@ -52,3 +52,83 @@ playbook non interattivi non richiedono più `--ask-become-pass`.
 Stato: **Fase 0.1 chiusa, 5/5 task** (#6 chiusa). Prossima: Fase 0.3
 punto 1 (volume NTFS nel diskpart, il test da minuti che può chiudere
 il bug 32) e/o Fase 0.2 su decisione dell'operatore.
+
+## 2026-08-30 — Fase 0.3 (#8): bug 32 root-causato e risolto
+
+Percorso della diagnosi, in ordine, ogni passo su evidenza reale:
+
+1. **Ipotesi "volume NTFS scratch mancante" falsificata**: aggiunti
+   `create partition primary` + `format ntfs quick` + `assign` allo
+   script diskpart; tutto riuscito lato disco, ma setup.exe fallisce
+   identico e C: resta completamente vuoto — Setup muore prima di
+   toccare qualunque disco.
+2. **Svolta strumentale**: lanciando `I:\sources\setup.exe` (il
+   binario reale) invece dello stub `I:\setup.exe`, per la prima
+   volta in tutta la campagna compaiono un messaggio d'errore
+   esplicito ("Windows could not apply the Windows PE bootstrap
+   setting specified in the unattend answer file") e, soprattutto,
+   **setupact.log/setuperr.log in X:\Windows\Panther**. Lo stub
+   inghiotte dialoghi e log; d'ora in poi si lancia sempre il
+   binario diretto (stessa scelta di MDT).
+3. **setuperr.log, prova regina**: cinque errori CSI `E_INVALIDARG`
+   su `node name = PathAndCredentials, name in handler = 0`, chiusi
+   da `IBS Failed applying WinPE bootstrap unattend settings with
+   status 0x80070057`. Il blocco DriverPaths dell'answer file è
+   rigettato al parsing.
+4. **Iterazione rapida con `virsh change-media`**: varianti
+   dell'answer file costruite sull'host (genisoimage, secondi) e
+   scambiate a caldo sul CD-ROM senza riavvii. La variante di
+   controllo senza DriverPaths sposta l'errore a `0x8007007E`
+   ERROR_MOD_NOT_FOUND — e la spiegazione arriva dal punto 5.
+5. **Verifica dell'ambiente**: nel boot dell'immagine WinPE "pura"
+   (indice 1, scelta del fix 28) `X:\sources` contiene **0 file**:
+   niente runtime di Setup. Il "name in handler = 0" e il
+   MOD_NOT_FOUND sono la stessa cosa vista da due angoli: setup.exe
+   stava girando in un ambiente monco.
+6. **Fix architetturale (bug 28+32 risolti insieme)**: si torna a
+   bootare l'immagine "Setup" (indice 2, runtime completo) e
+   startnet.cmd ci gira comunque grazie a un **winpeshl.ini
+   iniettato via wimboot** — il meccanismo documentato: winpeshl.exe
+   senza ini lancia X:\sources\setup.exe (ecco perché il bug 28
+   "saltava" startnet); con l'ini esegue ciò che dice l'ini. Stesso
+   pattern delle boot image MDT. Nuovo template
+   `windows/winpeshl.ini.j2`, staging per host, imgfetch in iPXE,
+   test aggiornati.
+7. **Insidia di deployment scoperta nel primo test**: gli script
+   iPXE per-host sono renderizzati da `ipxe_menu` (deploy-pxe /
+   provision), non da `prepare-windows-media` — il primo boot di
+   verifica usava lo script vecchio senza l'imgfetch di
+   winpeshl.ini (Setup partito con l'auto-lancio di default, GUI
+   moderna e errore `0x80070057 - 0x40030`). Dopo `make deploy-pxe`:
+   **forge-ai.log presente su X:\ = startnet.cmd eseguito dentro
+   l'immagine Setup** — fix winpeshl confermato sul reale.
+8. **PathAndCredentials rigettato anche col runtime completo**:
+   stesso E_INVALIDARG a runtime pieno → il blocco è genuinamente
+   non supportato da questo engine (Server 2025 26100.32230, il
+   nuovo setup 24H2), non un artefatto di handler mancanti.
+9. **Prova finale**: variante senza DriverPaths, boot pulito
+   automatico end-to-end → **"Installing Windows Server / Copying
+   Windows Server files ✓ / Getting files ready (15%→36%...)"** — la
+   prima installazione Windows completamente automatica mai
+   raggiunta dalla pipeline. (Run di controllo ancora in corso al
+   momento della scrittura.)
+10. **Sostituto per i driver nell'OS installato** (senza DriverPaths
+    l'OS non riceverebbe NetKVM → specialize senza rete → stallo
+    tardivo): `setup.exe /InstallDrivers` (supportato da WinPE da
+    24H2) contro una cartella piatta `forge-install-drivers` che
+    `windows_media` ora stagia nella share virtio; startnet mappa la
+    share su J: e passa il path stile-locale, evitando l'UNC.
+    Answer file ripulito dal blocco, test aggiornati
+    (`test_no_driver_paths_block_survives`,
+    `test_startnet_passes_installdrivers`).
+
+Nota di colore metodologico: il commento XML che spiegava la
+rimozione di DriverPaths conteneva a sua volta un `--` letterale —
+**quinta occorrenza** dello stesso errore autoinflitto nella
+campagna, stavolta beccata dai rendering test in pochi minuti anziché
+da un boot fallito su hardware.
+
+Issue collegate aperte su richiesta di Daniele durante la sessione:
+#10 (runner self-hosted per la non-regressione hardware, sub-issue di
+#5) e #11-#14 (lifecycle Dev→Staging→Prod, issue autonoma con tre
+sub-issue).
