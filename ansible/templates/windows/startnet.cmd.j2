@@ -187,20 +187,24 @@ rem itself, not yet understood, leaves the disk ready for the next one.
 rem A bounded retry is the pragmatic fix: if Setup actually succeeds it
 rem reboots the machine and none of this runs again anyway, so retrying
 rem unconditionally on any non-reboot return is safe.
-rem sources\setup.exe directly, not the stub at the media root: the
-rem stub swallows both the error dialog and the Panther logs (bug 32's
-rem diagnosis was blind for days until the direct binary produced
-rem setuperr.log on the first try). Same choice MDT makes.
-rem /InstallDrivers (WinPE-supported since 24H2) carries the VirtIO
-rem drivers into the installed OS; it replaces the answer file's
-rem DriverPaths block, which this setup engine rejects at parse time
-rem (bug 32). Without it the installed OS would have no NetKVM, the
-rem specialize-pass downloads would fail, and the pipeline would stall
-rem right after an apparently successful install.
+rem The media-root setup.exe (the modern entry point), NOT
+rem sources\setup.exe: /InstallDrivers belongs to the new setup engine
+rem and the legacy sources binary rejects it outright ("An unknown
+rem command-line option [/InstallDrivers] was specified", observed on
+rem the first /InstallDrivers run). The old reason to avoid the stub
+rem (it swallowed dialogs and logs during the bug-32 diagnosis) died
+rem with the move to the full Setup image: Panther logging works here
+rem regardless of the entry point.
+rem /InstallDrivers (WinPE-supported since 24H2, recursive) carries
+rem the VirtIO drivers into the installed OS; it replaces the answer
+rem file's DriverPaths block, which this setup engine rejects at parse
+rem time (bug 32). Without it the installed OS would have no NetKVM,
+rem the specialize-pass downloads would fail, and the pipeline would
+rem stall right after an apparently successful install.
 set FORGE_SETUP_TRIES=0
 :setup_retry
 set /a FORGE_SETUP_TRIES+=1
-%FORGE_SRC%\sources\setup.exe /InstallDrivers %FORGE_DRV%\forge-install-drivers
+%FORGE_SRC%\setup.exe /InstallDrivers %FORGE_DRV%\forge-install-drivers
 set FORGE_SETUP_RC=%errorlevel%
 echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
 if %FORGE_SETUP_TRIES% lss 3 (
