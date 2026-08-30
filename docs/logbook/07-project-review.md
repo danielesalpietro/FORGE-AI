@@ -398,3 +398,55 @@ Fase online in corso.
 Fix template per i run futuri: retry loop sul `net use` (6 tentativi
 × 10 s per winmedia, 3 × 10 s per virtio, `ping -n` come attesa) al
 posto del singolo retry immediato.
+
+## 2026-08-30 — FULL GREEN: `make provision-windows` completa end-to-end per la prima volta
+
+**EXIT_CODE=0** (verificato nel file di output, come da regola), recap:
+`forge-control ok=99 failed=0`, **`poc-windows-01 ok=5 failed=0`** —
+Ansible ha parlato con la Windows appena installata via WinRM.
+Screenshot finale: lock screen di Windows Server 2025.
+
+Catena completa, tutta automatica dal lancio in poi (l'unico
+intervento manuale del run è stato il retype di startnet dopo il bug
+41, prima che i fix fossero deployati):
+
+PXE → iPXE → wimboot (winpeshl.ini + startnet) → WinPE: driver
+virtio, rete, SMB con retry, diskpart split prep/wipe → `setup.exe
+/InstallDrivers` (stub moderno) → Autounattend da CD-ROM → fase
+online (25→100%) → riavvio mid-install: `exit 1` → BdsDxe scorre
+PXEv4/v6, HTTPv4/v6 → **Windows Boot Manager da solo** → fase offline
+(0→100%) → specialize: wrapper corto → `specialize.cmd` scaricato ed
+eseguito → callback **installed** (15:57:30) → altri due boot
+autonomi → OOBE → SetupComplete.cmd → Configure-WinRM.ps1 rc=0 →
+callback **configuring** (16:36) → playbook: flip boot order (config
+persistente ora hd,network — la live conserva il vecchio ordine fino
+al prossimo power cycle, by design), attesa listener WinRM, purge
+answer file + ISO unattend (verificata: 0 file), `win_ping` OK.
+
+Validazioni dal vivo in questo run: fix 33 (mid-install policy), fix
+36 (`exit 1`: visto sullo schermo "BdsDxe: failed to start Boot0002
+... 0000007F" seguito dalla prosecuzione della boot order), fix 37
+(specialize senza errori SMI), fix 38 (diskpart split), fix 41 (dopo
+restart winmedia il mount è andato al primo colpo del retype).
+
+Scoperte ulteriori del run, già fixate per i futuri:
+- **Un riavvio fisico consuma PIÙ di un dispatch**: il firmware ha
+  eseguito iPXE due volte sulla voce PXEv4 prima di proseguire →
+  local_boots +2 per riavvio. Col limite a 3, il secondo dispatch del
+  secondo riavvio avrebbe ri-servito l'INSTALLER sul disco quasi
+  completo. Limite default portato a 8 (rischio disinnescato a caldo
+  ricostruendo il container mentre la VM era offline dal network).
+- **Bug 42**: gli upload dei log guest (`specialize.log`,
+  `setupcomplete.log`) non hanno mai mandato l'X-Forge-Token e la
+  state service li rifiuta con 401 (visto nei log del container:
+  state POST 200, log POST 401 un rigo dopo). Header aggiunto a
+  entrambi i template.
+- Il task "Wait for Windows Setup to complete" del primo playbook ha
+  esaurito il budget (1h03) a causa dei recuperi manuali: rilanciato
+  `make provision-windows` a installazione in corso, il rerun è
+  idempotente (reset guard: installed/configuring protetti) e ha
+  chiuso il lifecycle. EXIT_CODE=0.
+
+Stato finale: `configuring` (il passaggio a `ready` appartiene alla
+fase di configurazione/baseline, issue #9 — non a questo gate).
+**Il gate del PoC Windows è verde.**
