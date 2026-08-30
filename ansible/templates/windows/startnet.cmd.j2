@@ -109,9 +109,17 @@ rem    already carries a partition table from an earlier attempt on
 rem    this same host can come up offline or read-only, and "clean"
 rem    itself refuses to run on such a disk ("Virtual Disk Service
 rem    error: The operation is not allowed on a disk that is
-rem    offline."), confirmed on a real rerun in this environment. Both
-rem    commands are harmless no-ops on a disk that is already online
-rem    and writable.
+rem    offline."), confirmed on a real rerun in this environment.
+rem
+rem    They MUST live in their own script though: they are NOT no-ops
+rem    on a disk that is already online -- "online disk" then raises a
+rem    VDS ERROR ("This disk is already online") and diskpart /s
+rem    ABORTS THE WHOLE SCRIPT at the first failing command, so clean/
+rem    convert/format silently never ran and Setup found the previous
+rem    half-install ("It looks like you started an upgrade" dialog;
+rem    observed 2026-08-30, docs/logbook/07-project-review.md). So:
+rem    first a best-effort prep script whose errors are acceptable,
+rem    then the wipe script that must succeed from its first command.
 rem
 rem    The NTFS volume created and lettered below is the bug 32 fix
 rem    (docs/logbook/06-fase6-provisioning-windows.md): setup.exe run
@@ -125,11 +133,16 @@ rem    The answer file's DiskConfiguration (WillWipeDisk=true) replaces
 rem    this scratch layout with the real ESP/MSR/Windows one anyway,
 rem    so nothing here needs to match it.
 rem -------------------------------------------------------------------
-echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
+echo [4/6] Preparing disk 0... & echo [4/6] diskpart prep (best-effort) >> "%FORGE_LOG%"
 (
   echo select disk 0
   echo online disk
   echo attributes disk clear readonly
+) > X:\forge-diskprep.txt
+diskpart /s X:\forge-diskprep.txt >> "%FORGE_LOG%" 2>&1
+echo [4/6] diskpart wipe >> "%FORGE_LOG%"
+(
+  echo select disk 0
   echo clean
   echo convert gpt
   echo create partition primary
@@ -138,7 +151,9 @@ echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
   echo rescan
 ) > X:\forge-diskpart.txt
 diskpart /s X:\forge-diskpart.txt >> "%FORGE_LOG%" 2>&1
-timeout /t 5 /nobreak >nul
+rem timeout.exe does not exist in WinPE ("'timeout' is not recognized",
+rem observed 2026-08-30); ping to localhost is the WinPE-safe sleep.
+ping -n 6 127.0.0.1 >nul
 
 rem -------------------------------------------------------------------
 rem 5. Announce that installation has started.
@@ -208,7 +223,8 @@ set /a FORGE_SETUP_TRIES+=1
 set FORGE_SETUP_RC=%errorlevel%
 echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
 if %FORGE_SETUP_TRIES% lss 3 (
-  timeout /t 60 /nobreak >nul
+  rem timeout.exe does not exist in WinPE; ping is the safe sleep.
+  ping -n 61 127.0.0.1 >nul
   goto :setup_retry
 )
 

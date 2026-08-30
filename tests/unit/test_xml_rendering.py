@@ -135,6 +135,28 @@ def test_startnet_passes_installdrivers(jinja_env, base_config, windows_host):
     assert "forge-install-drivers" in script
 
 
+def test_startnet_avoids_winpe_traps(jinja_env, base_config, windows_host):
+    """Two WinPE facts learned the hard way (2026-08-30):
+    - timeout.exe does not ship in WinPE ('timeout' is not recognized),
+      so every wait must use ping -n to localhost instead;
+    - diskpart /s aborts the WHOLE script at the first failing command,
+      and 'online disk' FAILS on a disk that is already online, so the
+      best-effort prep (online/readonly) must live in a separate script
+      from the clean/format sequence or a dirty disk is never wiped and
+      Setup finds the previous half-install (upgrade dialog)."""
+    script = jinja_env.get_template("windows/startnet.cmd.j2").render(
+        **render_context.build_context(base_config, host=windows_host)
+    )
+    assert "timeout /t" not in script, "timeout.exe does not exist in WinPE"
+    assert "forge-diskprep.txt" in script, "prep and wipe must be separate diskpart scripts"
+    assert script.index("echo online disk") < script.index("forge-diskprep.txt"), (
+        "online disk belongs to the best-effort prep script"
+    )
+    assert script.index("echo clean") > script.index("forge-diskprep.txt"), (
+        "clean belongs to the wipe script, after the prep script ran"
+    )
+
+
 def test_computer_name_is_set_and_within_the_netbios_limit(unattend_tree, windows_host):
     computer_name = unattend_tree.find(".//u:settings[@pass='specialize']//u:ComputerName", NS)
     assert computer_name is not None
