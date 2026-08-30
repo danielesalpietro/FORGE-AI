@@ -41,7 +41,14 @@ Piano: `docs/PROJECT-REVIEW.md`. Issue principale #5, sub-issue #6-#9.
   correttamente: consegnata come comando pronto nel commento di
   chiusura di #6, da eseguire manualmente.
 
-Stato: Fase 0.1 chiusa (4/5 automatizzati, 1 consegnato per azione
-manuale). Prossima: Fase 0.3 punto 1 (volume NTFS nel diskpart, il
-test da minuti che può chiudere il bug 32) e/o Fase 0.2 su decisione
-dell'operatore.
+**Aggiornamento**: Daniele ha eseguito il comando NOPASSWD sull'host.
+L'errore finale di `rm` era un difetto del comando suggerito (il file
+in `/tmp` apparteneva a root dopo `sudo tee`, serviva `sudo rm`), ma
+la catena si era rotta dopo l'`install`: il drop-in era già attivo.
+Verificato dal vivo (`sudo -n true` → OK, drop-in `-r--r-----` in
+`/etc/sudoers.d/`), residuo in `/tmp` ripulito. Da questo momento i
+playbook non interattivi non richiedono più `--ask-become-pass`.
+
+Stato: **Fase 0.1 chiusa, 5/5 task** (#6 chiusa). Prossima: Fase 0.3
+punto 1 (volume NTFS nel diskpart, il test da minuti che può chiudere
+il bug 32) e/o Fase 0.2 su decisione dell'operatore.
