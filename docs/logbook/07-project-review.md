@@ -377,3 +377,24 @@ classe dirty-disk e rende istantaneo il check), 216/216 test verdi,
 `make provision-windows` in background alle ~14:50Z. Limite di tempo
 concordato: se non verde entro ~2 ore o fallimento su cosa nuova →
 pivot parallelo su ESXi-direct (fase 0.2, issue #7).
+
+## 2026-08-30 — Rilancio 2: bug 41 (flakiness SMB) colto e recuperato senza bruciare il tentativo
+
+Il rilancio 2 (disco vergine) si è fermato in WinPE al passo [3/6]:
+`net use \192.168.250.1\winmedia` → System error 53 due volte
+(anche col fallback guest), startnet in :fail. La rete del guest era
+sana (IP 192.168.250.22 acquisito) e **nello stesso momento** la
+share rispondeva perfettamente a smbclient dal lato host: è la
+flakiness già nota dopo i reset rapidi, ora osservata dal vivo con
+evidenza da entrambi i lati (bug 41).
+
+Recupero senza perdere il tentativo: restart di forge-winmedia,
+poi `startnet.cmd` ridigitato a mano nella console WinPE ancora
+aperta — la catena è ripartita da capo, tutti i 6 passi puliti
+(diskpart split incluso, primo collaudo riuscito del fix 38), e il
+Setup moderno è arrivato a "We're getting a few things ready".
+Fase online in corso.
+
+Fix template per i run futuri: retry loop sul `net use` (6 tentativi
+× 10 s per winmedia, 3 × 10 s per virtio, `ping -n` come attesa) al
+posto del singolo retry immediato.
