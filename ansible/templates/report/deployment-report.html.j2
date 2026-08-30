@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+{#
+   Void elements are self-closed and only XML-defined entities are used,
+   so the rendered report parses as strict XML as well as HTML5. That is
+   what lets tests/unit/test_report_rendering.py verify it is
+   well-formed rather than merely browser-tolerable -- a report is
+   evidence, and evidence should be machine-checkable.
+#}
+<html lang="en" data-status="{{ report.status }}">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>FORGE-AI deployment {{ report.deployment_id }}</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #1a1d21; --muted: #5b6570;
+    --line: #dfe3e8; --card: #f7f8fa;
+    --ok: #1f7a3f; --fail: #b3261e; --warn: #8a5a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --fg:#e6e9ec; --muted:#9aa4ae; --line:#2a2f35;
+            --card:#1c2025; --ok:#4ade80; --fail:#f87171; --warn:#fbbf24; }
+  }
+  body { margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--fg);
+         font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 62rem; margin: 0 auto; }
+  h1 { font-size:1.6rem; margin:0 0 .25rem; }
+  h2 { font-size:1.2rem; margin:2rem 0 .5rem; border-bottom:1px solid var(--line); padding-bottom:.35rem; }
+  h3 { font-size:1rem; margin:1.5rem 0 .5rem; }
+  code { font-family: ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:.9em; }
+  .sub { color:var(--muted); margin:0 0 1.5rem; }
+  .badge { display:inline-block; padding:.15rem .6rem; border-radius:999px;
+           font-weight:600; font-size:.8rem; letter-spacing:.03em; }
+  .ok   { background:color-mix(in srgb, var(--ok) 18%, transparent);   color:var(--ok); }
+  .fail { background:color-mix(in srgb, var(--fail) 18%, transparent); color:var(--fail); }
+  .warn { background:color-mix(in srgb, var(--warn) 18%, transparent); color:var(--warn); }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; margin:.5rem 0 1rem; font-size:.92rem; }
+  th, td { text-align:left; padding:.45rem .7rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; white-space:nowrap; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:1rem 1.15rem; margin:1rem 0; }
+  ul { margin:.4rem 0 0; padding-left:1.2rem; }
+  footer { color:var(--muted); font-size:.85rem; margin-top:3rem;
+           border-top:1px solid var(--line); padding-top:1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>FORGE-AI deployment report</h1>
+  <p class="sub">
+    <code>{{ report.deployment_id }}</code> · environment <code>{{ report.environment }}</code> ·
+    commit <code>{{ report.git_commit[:12] }}</code> ·
+    <span class="badge {{ 'ok' if report.status == 'success' else 'fail' }}">{{ report.status | upper }}</span>
+  </p>
+
+  <div class="card wrap">
+    <table>
+      <tr><th>Started</th><td><code>{{ report.started_at }}</code></td></tr>
+      <tr><th>Finished</th><td><code>{{ report.finished_at }}</code></td></tr>
+      <tr><th>Duration</th><td>{{ report.duration_seconds }} s</td></tr>
+      <tr><th>Operator</th><td><code>{{ report.operator }}</code></td></tr>
+      <tr><th>Trigger</th><td><code>{{ report.trigger }}</code></td></tr>
+      <tr><th>Branch</th><td><code>{{ report.git_branch }}</code></td></tr>
+{% if report.semaphore_task_url %}
+      <tr><th>Semaphore</th><td><a href="{{ report.semaphore_task_url }}">task {{ report.semaphore_task_id }}</a></td></tr>
+{% endif %}
+    </table>
+  </div>
+
+  <h2>Hosts</h2>
+{% for host in report.hosts %}
+  <div class="card">
+    <h3>{{ host.name }}
+      <span class="badge {{ 'ok' if host.status == 'success' else 'fail' }}">{{ host.status | upper }}</span>
+    </h3>
+    <div class="wrap">
+    <table>
+      <tr><th>OS</th><td>{{ host.os }}</td></tr>
+      <tr><th>Address</th><td><code>{{ host.ip_address }}</code> / <code>{{ host.mac_address }}</code></td></tr>
+      <tr><th>Resources</th><td>{{ host.vcpu }} vCPU · {{ host.memory_mb }} MB · {{ host.disk_gb }} GB · {{ host.firmware | upper }}</td></tr>
+      <tr><th>Provisioning</th><td>{{ host.provisioning_result }}</td></tr>
+      <tr><th>Configuration</th><td>{{ host.configuration_result }}</td></tr>
+      <tr><th>Validation</th><td>{{ host.validation_result }}</td></tr>
+      <tr><th>Boot state</th><td><code>{{ host.boot_state }}</code> after {{ host.install_attempts }} attempt(s)</td></tr>
+      <tr><th>Duration</th><td>{{ host.duration_seconds }} s</td></tr>
+    </table>
+    </div>
+{% if host.failed_tasks | length > 0 %}
+    <p><strong class="fail">Failed tasks:</strong></p>
+    <ul>
+{% for task in host.failed_tasks %}
+      <li><code>{{ task.task }}</code> — {{ task.msg | default('no message') }}</li>
+{% endfor %}
+    </ul>
+{% endif %}
+  </div>
+{% endfor %}
+
+  <h2>Source media</h2>
+  <div class="wrap">
+  <table>
+    <tr><th>Artifact</th><th>Path</th><th>SHA-256</th></tr>
+{% for item in report.media %}
+    <tr><td>{{ item.name }}</td><td><code>{{ item.path }}</code></td><td><code>{{ item.sha256 | default('not recorded') }}</code></td></tr>
+{% endfor %}
+  </table>
+  </div>
+
+  <h2>Component versions</h2>
+  <div class="wrap">
+  <table>
+{% for name, version in report.versions.items() %}
+    <tr><th>{{ name }}</th><td><code>{{ version }}</code></td></tr>
+{% endfor %}
+  </table>
+  </div>
+
+  <h2>Logs</h2>
+  <ul>
+{% for entry in report.logs %}
+    <li><strong>{{ entry.component }}</strong> — <code>{{ entry.location }}</code>{% if entry.hint %} <span class="sub">{{ entry.hint }}</span>{% endif %}</li>
+{% endfor %}
+  </ul>
+
+  <footer>
+    Generated by FORGE-AI at {{ report.finished_at }}.
+    Machine-readable sibling: <code>{{ report.json_path }}</code>.
+  </footer>
+</main>
+</body>
+</html>

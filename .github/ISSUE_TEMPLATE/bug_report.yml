@@ -1,0 +1,118 @@
+---
+name: Bug report
+description: Something does not work as documented
+title: "[bug] "
+labels: [bug, triage]
+body:
+
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check `docs/TROUBLESHOOTING.md` — it covers
+        the failure modes this project sees most often, including PXE
+        timeouts, iPXE chainload loops, missing VirtIO drivers, the wrong
+        WIM index and an unavailable WinRM listener.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+      placeholder: |
+        Expected: poc-windows-01 to reach state=ready
+        Observed: it stayed at state=installing and reinstalled twice
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Which stage
+      options:
+        - Prerequisites / bootstrap
+        - Control plane (Gitea, Semaphore, Compose)
+        - Media preparation
+        - Network boot / PXE / iPXE
+        - Ubuntu installation
+        - Windows installation
+        - Post-install configuration (SSH / WinRM)
+        - Validation or smoke test
+        - Drift detection or reconciliation
+        - Teardown
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The exact commands, in order.
+      render: shell
+      placeholder: |
+        make check
+        make bootstrap
+        make prepare-media
+        make provision-windows     # fails here
+    validations:
+      required: true
+
+  - type: textarea
+    id: state
+    attributes:
+      label: Provisioning state
+      description: Output of `./scripts/set-boot-state.sh` (or `make state`).
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: prerequisites
+    attributes:
+      label: Prerequisite check
+      description: Output of `./bootstrap/check-prerequisites.sh --json`. This answers most environment questions at once.
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Please redact anything sensitive. Useful sources:
+        `journalctl -u forge-dnsmasq`, `/srv/forge-ai/logs/nginx/boot-access.log`,
+        `docker compose logs state`, `/srv/forge-ai/logs/guests/`,
+        `C:\ProgramData\forge-ai\setupcomplete.log`
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: host-os
+    attributes:
+      label: KVM host
+      placeholder: "Ubuntu 24.04.1 LTS, 6.8.0-51-generic, 32 GB RAM"
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Component versions
+      description: Output of `make version`.
+      placeholder: "ansible-core 2.17.5, libvirt 10.0.0, qemu 8.2.2, compose v2.29.7"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I read the relevant section of `docs/TROUBLESHOOTING.md`
+          required: true
+        - label: "`make validate` passes on my configuration"
+          required: false
+        - label: I have redacted every secret from the output above
+          required: true

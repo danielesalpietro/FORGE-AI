@@ -1,0 +1,203 @@
+---
+# =====================================================================
+# DESTRUCTIVE -- remove the PoC.
+# =====================================================================
+#   ansible-playbook playbooks/destroy-poc.yml -e confirm_destroy=DESTROY-POC
+#   make destroy CONFIRM=DESTROY-POC
+#
+# Removes, in order: the target VMs and their disks, the PXE services,
+# the provisioning network, and optionally the prepared media and the
+# control plane.
+#
+# What it does NOT remove unless asked:
+#   * the downloaded ISOs      (-e destroy_media=true)
+#   * the control-plane stack  (-e destroy_control_plane=true)
+#   * the Docker volumes       (-e destroy_volumes=true)
+#   * the reports              (never -- they are the audit trail)
+#
+# The confirmation is checked here, in the Ansible layer, and again in
+# roles/vm_lifecycle/tasks/destroy.yml. A UI survey field is not a
+# security boundary.
+# =====================================================================
+- name: Confirm the destruction
+  hosts: control_plane
+  gather_facts: true
+  tags: [destroy]
+
+  vars:
+    destroy_media: false
+    destroy_control_plane: false
+    destroy_volumes: false
+
+  tasks:
+    - name: Require the confirmation token
+      ansible.builtin.assert:
+        that:
+          - confirm_destroy | default('') == safety.destroy_confirmation_token
+        fail_msg: |
+          Refusing to destroy anything.
+
+          This playbook removes:
+            * the virtual machines {{ forge_hosts | map(attribute='name') | join(', ') }}
+            * their disk images under {{ storage.libvirt_pool_path }}
+            * the {{ forge_dnsmasq_service }} service
+            * the libvirt network '{{ provisioning_network.name }}'
+          {% if destroy_media | bool %}
+            * the prepared media under {{ storage.http_root }}
+          {% endif %}
+          {% if destroy_control_plane | bool %}
+            * the Docker control plane{{ ' AND its volumes (Gitea repositories, Semaphore history)' if destroy_volumes | bool else '' }}
+          {% endif %}
+
+          To proceed:
+            ansible-playbook playbooks/destroy-poc.yml -e confirm_destroy={{ safety.destroy_confirmation_token }}
+
+          Deployment reports under {{ storage.report_dir }} are never removed:
+          they are the audit trail.
+        success_msg: "Confirmed. Destroying the '{{ deployment.name }}' PoC."
+      tags: [destroy]
+
+    - name: State what is about to happen
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+           DESTROYING the '{{ deployment.name }}' PoC
+          ==========================================================
+           VMs and disks     : yes
+           PXE services      : yes
+           libvirt network   : yes
+           prepared media    : {{ 'yes' if destroy_media | bool else 'no  (-e destroy_media=true)' }}
+           control plane     : {{ 'yes' if destroy_control_plane | bool else 'no  (-e destroy_control_plane=true)' }}
+           Docker volumes    : {{ 'YES -- Gitea and Semaphore data will be lost' if destroy_volumes | bool else 'no  (-e destroy_volumes=true)' }}
+           reports           : kept ({{ storage.report_dir }})
+          ==========================================================
+      tags: [destroy]
+
+- name: Destroy the target virtual machines
+  hosts: control_plane
+  gather_facts: false
+  tags: [destroy]
+
+  roles:
+    - role: vm_lifecycle
+      vars:
+        vm_lifecycle_state: absent
+      tags: [destroy]
+
+- name: Remove the provisioning services
+  hosts: control_plane
+  gather_facts: true
+  tags: [destroy]
+
+  vars:
+    destroy_media: false
+    destroy_control_plane: false
+    destroy_volumes: false
+
+  tasks:
+    - name: Stop and disable the FORGE-AI dnsmasq instance
+      ansible.builtin.systemd_service:
+        name: "{{ forge_dnsmasq_service }}"
+        state: stopped
+        enabled: false
+      become: true
+      failed_when: false
+      tags: [destroy]
+
+    - name: Remove the dnsmasq unit and configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - "/etc/systemd/system/{{ forge_dnsmasq_service }}.service"
+        - "{{ forge_dnsmasq_config }}"
+      tags: [destroy]
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      become: true
+      tags: [destroy]
+
+    - name: Stop the provisioning network
+      community.libvirt.virt_net:
+        name: "{{ provisioning_network.name }}"
+        state: inactive
+        uri: qemu:///system
+      become: true
+      failed_when: false
+      tags: [destroy]
+
+    - name: Undefine the provisioning network
+      community.libvirt.virt_net:
+        name: "{{ provisioning_network.name }}"
+        command: undefine
+        uri: qemu:///system
+      become: true
+      failed_when: false
+      tags: [destroy]
+
+    - name: Remove the prepared media and boot artefacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - "{{ storage.http_root }}/ubuntu"
+        - "{{ storage.http_root }}/windows"
+        - "{{ storage.http_root }}/wimboot"
+        - "{{ storage.tftp_root }}"
+        - "{{ storage.state_dir }}"
+      when: destroy_media | bool
+      tags: [destroy]
+
+    - name: Note that the ISOs were kept
+      ansible.builtin.debug:
+        msg: >-
+          The downloaded ISOs under {{ storage.iso_dir }} were NOT removed --
+          re-downloading several gigabytes to rebuild the PoC is rarely what anyone
+          wants. Remove them by hand if you need the space.
+      when: destroy_media | bool
+      tags: [destroy]
+
+    - name: Tear down the control plane
+      community.docker.docker_compose_v2:
+        project_src: "{{ forge_repo_root }}/compose"
+        files: [docker-compose.yml]
+        env_files: ["{{ forge_compose_env_file }}"]
+        profiles: [windows]
+        state: absent
+        remove_volumes: "{{ destroy_volumes | bool }}"
+        remove_orphans: true
+      become: true
+      when: destroy_control_plane | bool
+      failed_when: false
+      tags: [destroy]
+
+    - name: Report what remains
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+           PoC destroyed
+          ==========================================================
+           Removed : VMs, disks, PXE services, provisioning network
+          {% if destroy_media | bool %}
+                     prepared media and boot artefacts
+          {% endif %}
+          {% if destroy_control_plane | bool %}
+                     the Docker control plane{{ ' and its volumes' if destroy_volumes | bool else '' }}
+          {% endif %}
+
+           Kept    : {{ storage.report_dir }}   deployment reports (audit trail)
+                     {{ storage.iso_dir }}      downloaded ISOs
+          {% if not destroy_control_plane | bool %}
+                     the Docker control plane -- still running
+          {% endif %}
+          {% if not destroy_volumes | bool and destroy_control_plane | bool %}
+                     Docker volumes: Gitea repositories and Semaphore history
+          {% endif %}
+
+           Rebuild with: make bootstrap && make prepare-media && make provision
+          ==========================================================
+      tags: [destroy]

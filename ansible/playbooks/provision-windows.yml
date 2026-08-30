@@ -1,0 +1,198 @@
+---
+# =====================================================================
+# Provision the Windows target from bare disk to a reachable WinRM host.
+# =====================================================================
+#   make provision-windows
+#
+# Requires operator-supplied Windows media. Fails with the acquisition
+# procedure if it is absent -- windows_media_required is true here,
+# unlike in site.yml.
+# =====================================================================
+- name: Prepare and boot the Windows target
+  hosts: control_plane
+  gather_facts: true
+  tags: [provisioning, windows]
+
+  roles:
+    - role: windows_media
+      vars:
+        windows_media_required: true
+      tags: [media]
+    - role: windows_winpe
+      tags: [media]
+    - role: windows_unattend
+      tags: [provisioning]
+    - role: ipxe_menu
+      vars:
+        ipxe_reset_state: true
+      tags: [provisioning]
+
+  tasks:
+    - name: Select the Windows targets
+      ansible.builtin.set_fact:
+        forge_windows_targets: "{{ forge_hosts | selectattr('os_family', 'eq', 'windows') | list }}"
+      tags: [always]
+
+    - name: Confirm the SMB export is reachable
+      # WinPE mounts this to reach install.wim. If it is down, WinPE
+      # boots, fails at step 3 and burns an install attempt.
+      ansible.builtin.command: "smbclient -N -L //{{ provisioning_network.gateway }}"
+      changed_when: false
+      failed_when: false
+      register: forge_smb_precheck
+      tags: [provisioning, validation]
+
+    - name: Stop when the SMB export is unreachable
+      ansible.builtin.fail:
+        msg: |
+          The Windows media SMB export at //{{ provisioning_network.gateway }} is not
+          answering. WinPE cannot reach install.wim without it, so booting the VM now
+          would waste an install attempt.
+
+          Start it:
+            docker compose --env-file compose/.env -f compose/docker-compose.yml \
+              --profile windows up -d winmedia
+
+          Check it:
+            smbclient -N -L //{{ provisioning_network.gateway }}
+            docker compose --profile windows logs winmedia
+      when: forge_smb_precheck.rc != 0
+      tags: [provisioning, validation]
+
+    - name: Ensure the Windows domains are running and network-booting
+      ansible.builtin.include_role:
+        name: vm_lifecycle
+      vars:
+        vm_lifecycle_state: running
+        forge_boot_target: network
+        forge_hosts: "{{ forge_windows_targets }}"
+      tags: [provisioning]
+
+    - name: Wait for Windows Setup to complete
+      # Windows reports 'installed' from the specialize pass and
+      # 'configuring' once SetupComplete.cmd has configured WinRM.
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/state/{{ item.mac_address | mac_hyphen }}"
+        method: GET
+        return_content: true
+        status_code: [200]
+      register: forge_windows_install_wait
+      until: >-
+        forge_windows_install_wait.json.state in ['configuring', 'ready', 'failed']
+      retries: "{{ (forge_wait_install_timeout | int / forge_wait_poll_interval | int) | round | int }}"
+      delay: "{{ forge_wait_poll_interval }}"
+      loop: "{{ forge_windows_targets }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: false
+      tags: [provisioning]
+
+    - name: Report the installation outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.name }}: state={{ item.json.state | default('unknown') }}
+          after {{ item.json.attempts | default(0) }} attempt(s)
+      loop: "{{ forge_windows_install_wait.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      tags: [provisioning]
+
+    - name: Fail on an installation that did not complete
+      ansible.builtin.fail:
+        msg: |
+          Windows installation did not reach a manageable state on:
+          {% for result in forge_windows_install_wait.results %}
+          {% if result.json.state | default('unknown') not in ['configuring', 'ready'] %}
+            {{ result.item.name }} -- state '{{ result.json.state | default('unknown') }}' after
+            {{ result.json.attempts | default(0) }} of {{ pxe.max_install_attempts }} attempts
+          {% endif %}
+          {% endfor %}
+
+          A state of 'installed' but not 'configuring' means Setup finished but
+          SetupComplete.cmd did not configure WinRM. That is the single most common
+          Windows failure here.
+
+          Where to look:
+            virt-viewer --connect qemu:///system <domain>       the console
+            {{ storage.log_dir }}/guests/<host>/setupcomplete.log   if it uploaded
+            C:\Windows\Panther\setupact.log                      unattend processing
+            C:\ProgramData\forge-ai\setupcomplete.log            the WinRM bootstrap
+
+          docs/TROUBLESHOOTING.md, "WinRM listener unavailable", has the manual
+          recovery: re-run Configure-WinRM.ps1 from the console.
+      when: >-
+        forge_windows_install_wait.results
+        | rejectattr('json.state', 'in', ['configuring', 'ready'])
+        | list | length > 0
+      tags: [provisioning]
+
+    - name: Re-point the installed hosts at their local disk
+      ansible.builtin.include_role:
+        name: vm_lifecycle
+        tasks_from: set-boot-order.yml
+      vars:
+        forge_boot_order_hosts: >-
+          {{ forge_windows_install_wait.results
+             | selectattr('json.state', 'in', ['configuring', 'ready'])
+             | map(attribute='item') | list }}
+      tags: [provisioning]
+
+    - name: Wait for the WinRM listener
+      ansible.builtin.wait_for:
+        host: "{{ item.item.ip_address }}"
+        port: "{{ security.winrm_port }}"
+        state: started
+        timeout: "{{ forge_wait_winrm_timeout }}"
+        delay: 15
+      loop: "{{ forge_windows_install_wait.results }}"
+      loop_control:
+        label: "{{ item.item.name }} ({{ item.item.ip_address }}:{{ security.winrm_port }})"
+      when: item.json.state | default('') in ['configuring', 'ready']
+      tags: [provisioning, validation]
+
+    - name: Purge the answer file
+      ansible.builtin.include_role:
+        name: windows_unattend
+        tasks_from: purge.yml
+      vars:
+        forge_installed_windows_hosts: >-
+          {{ forge_windows_install_wait.results
+             | selectattr('json.state', 'in', ['configuring', 'ready'])
+             | map(attribute='item.name') | list }}
+      tags: [provisioning, security]
+
+- name: Confirm Ansible can reach the Windows targets
+  hosts: windows
+  gather_facts: false
+  tags: [provisioning, windows, validation]
+
+  tasks:
+    - name: Wait for WinRM to accept a connection
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ forge_wait_winrm_timeout }}"
+        delay: 15
+        sleep: 15
+      tags: [provisioning, validation]
+
+    - name: Ping over WinRM
+      ansible.windows.win_ping:
+      tags: [provisioning, validation]
+
+    - name: Gather the facts
+      ansible.windows.setup:
+      tags: [provisioning, validation]
+
+    - name: Report the reachable host
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} is reachable over WinRM/HTTPS as {{ ansible_user }}:
+          {{ ansible_os_name }} {{ ansible_distribution_version }},
+          {{ ansible_processor_vcpus }} vCPU, {{ ansible_memtotal_mb }} MB.
+      tags: [provisioning, validation]
+
+    - name: Record the provisioning result
+      ansible.builtin.set_fact:
+        forge_provisioning_result: "installed and reachable over WinRM/HTTPS"
+        cacheable: true
+      tags: [always]

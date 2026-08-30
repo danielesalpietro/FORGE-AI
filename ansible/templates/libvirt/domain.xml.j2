@@ -1,0 +1,188 @@
+<!--
+  =====================================================================
+  FORGE-AI :: libvirt domain for {{ host.name }}
+  Rendered from ansible/templates/libvirt/domain.xml.j2
+  Deployment: {{ forge_deployment_id | default('manual') }}
+  =====================================================================
+  Boot order is the second half of the reinstall-loop guard. During
+  provisioning the domain boots from the network first; once the state
+  service reports "installed", ansible/roles/vm_lifecycle rewrites this
+  domain with hd first. Even if the state service were lost, the domain
+  would still come up on its own disk.
+-->
+<domain type="kvm">
+  <name>{{ host.name }}</name>
+  <title>FORGE-AI {{ host.profile }} ({{ deployment.name }})</title>
+  <description>Managed by FORGE-AI GitOps. commit={{ forge_git_commit | default('unknown') }} deployment={{ forge_deployment_id | default('manual') }}</description>
+
+  <memory unit="MiB">{{ host.memory_mb }}</memory>
+  <currentMemory unit="MiB">{{ host.memory_mb }}</currentMemory>
+  <vcpu placement="static">{{ host.vcpu }}</vcpu>
+
+  <os firmware="{{ 'efi' if host.firmware == 'uefi' else 'bios' }}">
+    <type arch="x86_64" machine="{{ host.machine | default('q35') }}">hvm</type>
+{% if host.firmware == 'uefi' %}
+    <firmware>
+      <!-- Secure Boot is off for the PoC: the iPXE binaries and the
+           Ubuntu kernel chain are not signed by a key in the default
+           OVMF db. docs/SECURITY.md, "unsigned boot components".
+           enrolled-keys (pre-enrolling the default Microsoft keys) is
+           only meaningful together with secure-boot itself, so libvirt
+           rejects enrolled-keys=yes with secure-boot=no outright: it
+           is left unset here rather than contradicting the line below. -->
+      <feature enabled="no" name="secure-boot"/>
+    </firmware>
+{% endif %}
+    <!-- This os/boot list is what set-boot-order.yml re-renders and
+         redefines to flip forge_boot_target from network to hd once a
+         host reports "installed"; it greps the redefined domain XML
+         for this exact <boot dev='...'/> pattern to confirm the switch
+         took effect. Per-device <boot order="N"/> elements on the disk
+         and interface below would express the same ordering, but
+         libvirt rejects the two mechanisms combined outright
+         ("per-device boot elements cannot be used together with
+         os/boot elements"), so only this one is used. -->
+{% for device in (['network', 'hd'] if forge_boot_target | default('network') == 'network' else ['hd', 'network']) %}
+    <boot dev="{{ device }}"/>
+{% endfor %}
+    <bootmenu enable="yes" timeout="3000"/>
+  </os>
+
+  <features>
+    <acpi/>
+    <apic/>
+{% if host.os_family == 'windows' %}
+    <!-- Hyper-V enlightenments: a large, measurable win for Windows
+         guests on KVM (timers, spinlocks, relaxed timing). -->
+    <hyperv mode="custom">
+      <relaxed state="on"/>
+      <vapic state="on"/>
+      <spinlocks state="on" retries="8191"/>
+      <vpindex state="on"/>
+      <synic state="on"/>
+      <stimer state="on"/>
+      <frequencies state="on"/>
+    </hyperv>
+{% endif %}
+    <vmport state="off"/>
+  </features>
+
+  <cpu mode="{{ host.cpu_mode | default('host-passthrough') }}" check="none" migratable="on">
+    <topology sockets="1" dies="1" cores="{{ host.vcpu }}" threads="1"/>
+  </cpu>
+
+  <clock offset="{{ 'localtime' if host.os_family == 'windows' else 'utc' }}">
+    <timer name="rtc" tickpolicy="catchup"/>
+    <timer name="pit" tickpolicy="delay"/>
+    <timer name="hpet" present="no"/>
+{% if host.os_family == 'windows' %}
+    <timer name="hypervclock" present="yes"/>
+{% endif %}
+  </clock>
+
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+
+  <pm>
+    <suspend-to-mem enabled="no"/>
+    <suspend-to-disk enabled="no"/>
+  </pm>
+
+  <devices>
+    <emulator>{{ libvirt_emulator | default('/usr/bin/qemu-system-x86_64') }}</emulator>
+
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2" cache="none" io="native" discard="unmap"/>
+      <source file="{{ storage.libvirt_pool_path }}/{{ host.name }}.qcow2"/>
+      <target dev="{{ 'vda' if host.disk_bus | default('virtio') == 'virtio' else 'sda' }}" bus="{{ host.disk_bus | default('virtio') }}"/>
+    </disk>
+
+{% if host.os_family == 'windows' and windows_attach_virtio_cdrom | default(false) %}
+    <!-- Optional fallback path: attach the VirtIO ISO as a CD-ROM so
+         Windows Setup can load storage drivers even if the SMB export
+         is unreachable. Enabled with -e windows_attach_virtio_cdrom=true.
+         docs/TROUBLESHOOTING.md, "Windows cannot load VirtIO disk". -->
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="{{ media.windows.virtio.iso_path }}"/>
+      <target dev="sdb" bus="sata"/>
+      <readonly/>
+    </disk>
+{% endif %}
+
+{% if host.os_family == 'windows' and windows_attach_unattend_cdrom | default(true) %}
+    <!-- Autounattend.xml delivered as a CD-ROM, built by windows_unattend
+         (genisoimage). Windows Setup auto-detects an answer file at the
+         root of an attached CD-ROM on its own, so startnet.cmd launches
+         setup.exe with no /unattend: flag at all. Bug 28 and bug 30
+         (docs/logbook/06-fase6-provisioning-windows.md) were both caused
+         by the previous approach: injecting the file into WinPE itself
+         via wimboot. This sidesteps that whole path rather than
+         patching it again. set-boot-order.yml sets
+         windows_attach_unattend_cdrom=false once the host reports
+         "installed": the disc carries the administrator password in a
+         reversible encoding (see Autounattend.xml.j2) and has no reason
+         to stay attached past that point. -->
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="{{ storage.libvirt_pool_path }}/{{ host.name }}-unattend.iso"/>
+      <target dev="sdc" bus="sata"/>
+      <readonly/>
+    </disk>
+{% endif %}
+
+    <controller type="usb" index="0" model="qemu-xhci" ports="8"/>
+    <controller type="pci" index="0" model="pcie-root"/>
+{% for slot in range(1, 6) %}
+    <controller type="pci" index="{{ slot }}" model="pcie-root-port"/>
+{% endfor %}
+
+    <interface type="network">
+      <mac address="{{ host.mac_address }}"/>
+      <source network="{{ provisioning_network.name }}"/>
+      <model type="{{ host.network_model | default('virtio') }}"/>
+    </interface>
+
+    <!-- Serial console: the only way to watch a headless Subiquity run
+         from the KVM host (`virsh console {{ host.name }}`). -->
+    <serial type="pty">
+      <target type="isa-serial" port="0"><model name="isa-serial"/></target>
+    </serial>
+    <console type="pty">
+      <target type="serial" port="0"/>
+    </console>
+
+    <!-- qemu-guest-agent channel. Used by the smoke tests to read the
+         guest's IP without depending on SSH or WinRM. -->
+    <channel type="unix">
+      <target type="virtio" name="org.qemu.guest_agent.0"/>
+    </channel>
+
+    <input type="tablet" bus="usb"/>
+    <input type="keyboard" bus="ps2"/>
+
+    <graphics type="vnc" port="-1" autoport="yes" listen="127.0.0.1">
+      <listen type="address" address="127.0.0.1"/>
+    </graphics>
+    <video>
+      <!-- qxl needs QEMU built with SPICE support, which this host's
+           build does not have: libvirt refuses the domain outright
+           ("unsupported configuration: domain configuration does not
+           support video model 'qxl'"), confirmed against this host's
+           own `virsh domcapabilities` (modelType enum:
+           vga/cirrus/vmvga/virtio/none/bochs/ramfb, no qxl). bochs is
+           a dumb framebuffer QEMU emulates without any guest driver:
+           the conventional no-SPICE choice for a Windows guest, so
+           Setup/WinPE still get a display before any GPU driver loads.
+           Linux still gets virtio (already proven working on
+           poc-ubuntu-01). -->
+      <model type="{{ 'bochs' if host.os_family == 'windows' else 'virtio' }}" heads="1"/>
+    </video>
+
+    <memballoon model="virtio"/>
+    <rng model="virtio">
+      <backend model="random">/dev/urandom</backend>
+    </rng>
+  </devices>
+</domain>

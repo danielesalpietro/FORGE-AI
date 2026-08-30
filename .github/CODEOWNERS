@@ -1,0 +1,56 @@
+# =====================================================================
+# FORGE-AI :: code owners
+# =====================================================================
+# Every pull request touching a listed path automatically requests a
+# review from its owner. Combined with the branch protection described
+# in docs/GITOPS-WORKFLOW.md ("Require review from Code Owners"), this
+# is what stops an infrastructure change reaching Gitea -- and therefore
+# Semaphore -- without someone who understands it having looked.
+#
+# Replace the placeholder handles with real ones before relying on this.
+# A CODEOWNERS file naming an account that cannot review is worse than
+# none: it looks like a control and is not.
+# =====================================================================
+
+# Default owner for anything not matched below.
+*                               @danielesalpietro
+
+# ---------------------------------------------------------------------
+# Desired state -- a change here changes what gets built
+# ---------------------------------------------------------------------
+/config/                        @danielesalpietro
+/config/schema/                 @danielesalpietro
+
+# ---------------------------------------------------------------------
+# Security-relevant paths
+# ---------------------------------------------------------------------
+# Secrets handling, the threat model, and anything that decides what a
+# machine trusts.
+/bootstrap/create-secrets.sh    @danielesalpietro
+/docs/SECURITY.md               @danielesalpietro
+/SECURITY.md                    @danielesalpietro
+/compose/nginx/                 @danielesalpietro
+/compose/samba/                 @danielesalpietro
+/ansible/templates/windows/Configure-WinRM.ps1.j2  @danielesalpietro
+
+# The boot chain: the first code a target machine executes.
+/ansible/templates/ipxe/        @danielesalpietro
+/ansible/templates/dnsmasq/     @danielesalpietro
+/compose/state-service/         @danielesalpietro
+/scripts/download-ipxe-assets.sh @danielesalpietro
+
+# Answer files carry credentials and decide the installed baseline.
+/ansible/templates/windows/     @danielesalpietro
+/ansible/templates/ubuntu/      @danielesalpietro
+
+# ---------------------------------------------------------------------
+# CI and supply chain
+# ---------------------------------------------------------------------
+/.github/                       @danielesalpietro
+/.github/workflows/             @danielesalpietro
+
+# ---------------------------------------------------------------------
+# Destructive paths
+# ---------------------------------------------------------------------
+/ansible/playbooks/destroy-poc.yml  @danielesalpietro
+/scripts/destroy.sh                 @danielesalpietro

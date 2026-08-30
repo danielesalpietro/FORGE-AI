@@ -1,0 +1,108 @@
+# =====================================================================
+# FORGE-AI :: boot artifact server
+# Rendered from ansible/templates/nginx/boot-server.conf.j2 into the
+# bootsrv container. Serves iPXE scripts, kernels, WIMs, seeds and the
+# per-host answer files on the isolated provisioning network only.
+# =====================================================================
+# Deployment: {{ forge_deployment_id | default('manual') }}
+
+server {
+    listen {{ control_plane.boot_http_port }} default_server;
+    server_name {{ control_plane.boot_hostname }} {{ provisioning_network.gateway }};
+
+    root /srv/http;
+
+    # Boot clients are firmware, not browsers: no compression games, no
+    # keepalive surprises, and a generous timeout for multi-GB reads.
+    sendfile on;
+    tcp_nopush on;
+    gzip off;
+    client_max_body_size {{ boot_server_max_body | default('64m') }};
+    send_timeout 600s;
+    keepalive_timeout 65s;
+
+    access_log /var/log/nginx/boot-access.log;
+    error_log  /var/log/nginx/boot-error.log warn;
+
+    # Firmware HTTP stacks are unforgiving about Content-Type; serving
+    # everything unknown as octet-stream is what keeps wimboot happy.
+    default_type application/octet-stream;
+    types {
+        text/plain          ipxe cfg txt log;
+        application/x-yaml  yaml yml;
+        text/plain          user-data meta-data vendor-data;
+    }
+
+    # -----------------------------------------------------------------
+    # Provisioning state and callbacks -> state service
+    # -----------------------------------------------------------------
+    location /state/ {
+        proxy_pass http://forge-state:{{ state_service_port | default(8090) }}/state/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 30s;
+        # Never cache: the whole point is that the answer changes as the
+        # host moves through its lifecycle.
+        add_header Cache-Control "no-store" always;
+    }
+
+    location /api/ {
+        proxy_pass http://forge-state:{{ state_service_port | default(8090) }}/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_request_buffering off;
+        client_max_body_size {{ boot_server_max_body | default('64m') }};
+        proxy_read_timeout 120s;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # -----------------------------------------------------------------
+    # Boot artifacts
+    # -----------------------------------------------------------------
+    location /ipxe/    { alias /srv/http/ipxe/;    autoindex on; }
+    location /wimboot/ { alias /srv/http/wimboot/; }
+    location /boot/    { alias /srv/http/boot/;    add_header Cache-Control "no-store" always; }
+
+    # The Ubuntu ISO is read by casper over HTTP; range requests matter.
+    location /iso/ {
+        alias /srv/http/iso/;
+        autoindex on;
+        add_header Accept-Ranges bytes;
+    }
+
+    location /ubuntu/ {
+        alias /srv/http/ubuntu/;
+        autoindex on;
+        # cloud-init fetches user-data/meta-data/vendor-data from the
+        # seed directory. A stale cached seed is a very confusing bug.
+        add_header Cache-Control "no-store" always;
+    }
+
+    location /windows/ {
+        alias /srv/http/windows/;
+        autoindex off;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # -----------------------------------------------------------------
+    # Health and inventory
+    # -----------------------------------------------------------------
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok","component":"forge-boot-server","environment":"{{ deployment.name }}"}';
+    }
+
+    location = / {
+        default_type text/plain;
+        return 200 "FORGE-AI boot server ({{ deployment.name }})\nSee /healthz, /state/, /api/state\n";
+    }
+
+    # Everything not explicitly exposed above is denied rather than
+    # falling through to a directory listing of /srv/http.
+    location / {
+        return 404;
+    }
+}

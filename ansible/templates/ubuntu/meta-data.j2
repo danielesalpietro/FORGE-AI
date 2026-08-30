@@ -1,0 +1,10 @@
+# FORGE-AI :: NoCloud meta-data for {{ host.name }}
+# Rendered from ansible/templates/ubuntu/meta-data.j2
+#
+# cloud-init requires this file to exist next to user-data even when it
+# carries nothing beyond the instance identity. instance-id must change
+# whenever the machine is genuinely rebuilt, otherwise cloud-init treats
+# the boot as a reboot of a known instance and skips per-instance
+# modules.
+instance-id: {{ host.name }}-{{ forge_deployment_id | default('manual') }}
+local-hostname: {{ host.name }}

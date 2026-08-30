@@ -1,0 +1,155 @@
+{# =====================================================================
+   FORGE-AI :: dnsmasq configuration for the provisioning network
+   Rendered by ansible/roles/pxe_server. DO NOT EDIT ON THE HOST --
+   changes are overwritten on the next run. Source of truth:
+   ansible/templates/dnsmasq/provisioning.conf.j2
+   ===================================================================== #}
+# Managed by FORGE-AI ({{ forge_deployment_id | default('manual') }})
+# Generated: {{ ansible_date_time.iso8601 | default('n/a') }}
+# Git commit: {{ forge_git_commit | default('unknown') }}
+#
+# SAFETY: this dnsmasq instance is bound *exclusively* to the libvirt
+# bridge {{ provisioning_network.bridge }} ({{ provisioning_network.gateway }}).
+# It must never answer DHCP on a production LAN. See docs/SECURITY.md
+# ("rogue DHCP server") and bootstrap/check-prerequisites.sh, which
+# probes for a competing DHCP server before this file is installed.
+
+# ---------------------------------------------------------------------
+# Privilege model
+# ---------------------------------------------------------------------
+# Without this, dnsmasq -- once it can retain capabilities via
+# CAP_SETPCAP -- auto-drops its own effective UID to "nobody" (65534),
+# since it judges the ambient capabilities enough to keep serving on
+# privileged ports. tftp-secure then compares the *file* owner (root,
+# as deployed by this role) against dnsmasq's *own* effective UID and
+# rejects every file as "Permission denied" on a UID mismatch, even
+# though the file's mode bits would otherwise allow the read. Forcing
+# user/group=root keeps dnsmasq at the UID systemd already started it
+# as (User=root in forge-dnsmasq.service.j2), matching the hardening
+# model actually in place: a restricted CapabilityBoundingSet, not a
+# UID drop. Confirmed on the real host with strace (geteuid()==65534
+# without this, ==0 with it) and a real TFTP GET (curl tftp://).
+user=root
+group=root
+
+# ---------------------------------------------------------------------
+# Interface binding
+# ---------------------------------------------------------------------
+interface={{ provisioning_network.bridge }}
+listen-address={{ provisioning_network.gateway }}
+# bind-dynamic (not bind-interfaces) so dnsmasq copes with the bridge
+# being recreated by libvirt without a restart loop.
+bind-dynamic
+except-interface=lo
+no-hosts
+domain-needed
+bogus-priv
+expand-hosts
+domain={{ deployment.domain }}
+local=/{{ deployment.domain }}/
+
+# ---------------------------------------------------------------------
+# DNS
+# ---------------------------------------------------------------------
+{% if provisioning_network.dns_servers | default([]) | length > 0 %}
+no-resolv
+{% for resolver in provisioning_network.dns_servers %}
+server={{ resolver }}
+{% endfor %}
+{% else %}
+# No explicit resolvers configured: forward to the host's own resolvers.
+{% endif %}
+
+# Control-plane names, resolvable from every provisioned guest.
+address=/{{ control_plane.boot_hostname }}/{{ provisioning_network.gateway }}
+address=/{{ control_plane.gitea_hostname }}/{{ provisioning_network.gateway }}
+address=/{{ control_plane.semaphore_hostname }}/{{ provisioning_network.gateway }}
+
+# ---------------------------------------------------------------------
+# DHCP
+# ---------------------------------------------------------------------
+dhcp-authoritative
+dhcp-range={{ provisioning_network.dhcp_start }},{{ provisioning_network.dhcp_end }},{{ provisioning_network.netmask }},12h
+dhcp-option=option:router,{{ provisioning_network.gateway }}
+dhcp-option=option:dns-server,{{ provisioning_network.gateway }}
+dhcp-option=option:domain-name,{{ deployment.domain }}
+{% if provisioning_network.ntp_servers | default([]) | length > 0 %}
+dhcp-option=option:ntp-server,{{ provisioning_network.gateway }}
+{% endif %}
+dhcp-lease-max=253
+# Not storage.state_dir: that directory is 0750, owned by UID 10001 for
+# the state-service container (see libvirt_host's directory-creation
+# task). forge-dnsmasq.service runs as root but with a deliberately
+# narrow CapabilityBoundingSet that excludes CAP_DAC_OVERRIDE, so it
+# gets a plain "Permission denied" there like any other UID would --
+# confirmed via journalctl, not assumed. log_dir is root:root 0755 and
+# already in the unit's ReadWritePaths, so it works without loosening
+# state_dir's permissions for a container that has nothing to do with
+# dnsmasq's own lease file.
+dhcp-leasefile={{ storage.log_dir }}/dnsmasq.leases
+
+# ---------------------------------------------------------------------
+# Static reservations (one per configured host)
+# ---------------------------------------------------------------------
+{% for host in forge_hosts %}
+# {{ host.name }} -- {{ host.profile }} ({{ host.vcpu }} vCPU / {{ host.memory_mb }} MB / {{ host.disk_gb }} GB)
+dhcp-host={{ host.mac_address }},{{ host.ip_address }},{{ host.name }},set:{{ host.mac_address | replace(':', '-') }},infinite
+{% endfor %}
+
+# ---------------------------------------------------------------------
+# Architecture detection
+# ---------------------------------------------------------------------
+# RFC 4578 option 93 (client system architecture):
+#   0  = Intel x86 legacy BIOS PXE
+#   6  = EFI IA32
+#   7  = EFI x86-64 (byte code / machine type)
+#   9  = EFI x86-64
+#   16 = EFI x86-64 HTTP Boot (UEFI 2.5+)
+dhcp-match=set:bios,option:client-arch,0
+dhcp-match=set:efi32,option:client-arch,6
+dhcp-match=set:efi64,option:client-arch,7
+dhcp-match=set:efi64,option:client-arch,9
+dhcp-match=set:efihttp,option:client-arch,16
+
+# ---------------------------------------------------------------------
+# iPXE chainload loop prevention
+# ---------------------------------------------------------------------
+# A firmware PXE ROM asks first: we hand it an iPXE binary.
+# iPXE then asks again, and identifies itself two ways:
+#   * DHCP option 175 (iPXE encapsulated options)  -> tag "ipxe"
+#   * DHCP user-class "iPXE"                       -> tag "ipxe"
+# Because every "give it a binary" rule carries tag:!ipxe, iPXE can
+# never be told to load iPXE again -- which is exactly the classic
+# chainload loop. See docs/TROUBLESHOOTING.md ("iPXE chainloading loop").
+dhcp-match=set:ipxe,175
+dhcp-userclass=set:ipxe,iPXE
+
+# Stage 1 -- firmware PXE ROM, hand over the matching iPXE build (TFTP).
+dhcp-boot=tag:bios,tag:!ipxe,{{ ipxe_bios_binary | default('undionly.kpxe') }},{{ control_plane.boot_hostname }},{{ provisioning_network.gateway }}
+dhcp-boot=tag:efi64,tag:!ipxe,{{ ipxe_efi_binary | default('ipxe.efi') }},{{ control_plane.boot_hostname }},{{ provisioning_network.gateway }}
+dhcp-boot=tag:efi32,tag:!ipxe,{{ ipxe_efi32_binary | default('ipxe32.efi') }},{{ control_plane.boot_hostname }},{{ provisioning_network.gateway }}
+
+{% if pxe.enable_uefi_http_boot | default(true) %}
+# Stage 1b -- UEFI HTTP Boot (arch 16). The client expects vendor-class
+# "HTTPClient" and a full URL in the boot filename.
+dhcp-option-force=tag:efihttp,60,HTTPClient
+dhcp-boot=tag:efihttp,tag:!ipxe,{{ forge_boot_base_url }}/ipxe/{{ ipxe_efi_binary | default('ipxe.efi') }}
+{% endif %}
+
+# Stage 2 -- iPXE is running: hand it the HTTP boot script, never a binary.
+dhcp-boot=tag:ipxe,{{ forge_boot_base_url }}/boot/boot.ipxe
+
+# ---------------------------------------------------------------------
+# TFTP (stage 1 only -- everything large moves over HTTP)
+# ---------------------------------------------------------------------
+enable-tftp
+tftp-root={{ storage.tftp_root }}
+tftp-no-blocksize
+tftp-secure
+
+# ---------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------
+log-queries
+log-dhcp
+log-facility={{ storage.log_dir }}/dnsmasq.log

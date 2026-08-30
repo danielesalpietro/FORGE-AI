@@ -1,0 +1,214 @@
+---
+# =====================================================================
+# vm_lifecycle -- create, boot, re-point and destroy the target VMs
+# =====================================================================
+# The boot order here is the second half of the reinstall-loop guard.
+# The state service decides what a *network* boot receives; this role
+# decides whether the VM tries the network at all.
+#
+#   provisioning : <boot dev='network'/> then <boot dev='hd'/>
+#   installed    : <boot dev='hd'/>      then <boot dev='network'/>
+#
+# Belt and braces on purpose: if the state service were lost entirely,
+# an installed VM would still come up on its own disk instead of
+# reinstalling.
+# =====================================================================
+
+- name: List the currently defined domains
+  community.libvirt.virt:
+    command: list_vms
+    uri: qemu:///system
+  become: true
+  register: forge_existing_vms
+  changed_when: false
+  tags: [always, provisioning]
+
+- name: Include the destroy path
+  ansible.builtin.include_tasks: destroy.yml
+  when: vm_lifecycle_state == 'absent'
+  tags: [provisioning, destroy]
+
+- name: End here when destroying
+  ansible.builtin.meta: end_play
+  when: vm_lifecycle_state == 'absent'
+  tags: [provisioning, destroy]
+
+# ---------------------------------------------------------------------
+# Disks
+# ---------------------------------------------------------------------
+- name: Check for an existing disk image
+  ansible.builtin.stat:
+    path: "{{ storage.libvirt_pool_path }}/{{ item.name }}.qcow2"
+  become: true
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_vm_disks
+  tags: [provisioning]
+
+- name: Refuse to silently destroy an existing disk
+  ansible.builtin.fail:
+    msg: |
+      A disk image already exists for:
+      {% for result in forge_vm_disks.results | selectattr('stat.exists') %}
+        {{ result.item.name }} -> {{ result.stat.path }} ({{ (result.stat.size / 1073741824) | round(1) }} GB)
+      {% endfor %}
+
+      Recreating it destroys the installed operating system.
+
+      To rebuild deliberately:
+        ansible-playbook playbooks/create-vms.yml -e vm_lifecycle_recreate_disk=true
+
+      To tear the whole PoC down:
+        make destroy
+  when:
+    - vm_lifecycle_recreate_disk | bool
+    - forge_vm_disks.results | selectattr('stat.exists') | list | length > 0
+    - not forge_force | bool
+    - confirm_destroy | default('') != safety.destroy_confirmation_token
+  tags: [provisioning]
+
+- name: Create the qcow2 disk images
+  ansible.builtin.command:
+    argv:
+      - qemu-img
+      - create
+      - -f
+      - qcow2
+      - -o
+      - "preallocation=metadata,lazy_refcounts=on"
+      - "{{ storage.libvirt_pool_path }}/{{ item.item.name }}.qcow2"
+      - "{{ item.item.disk_gb }}G"
+  become: true
+  loop: "{{ forge_vm_disks.results }}"
+  loop_control:
+    label: "{{ item.item.name }} ({{ item.item.disk_gb }} GB)"
+  when: vm_lifecycle_recreate_disk | bool or not item.stat.exists
+  register: forge_disk_created
+  changed_when: forge_disk_created.rc == 0
+  tags: [provisioning]
+
+- name: Set the disk ownership libvirt expects
+  ansible.builtin.file:
+    path: "{{ storage.libvirt_pool_path }}/{{ item.name }}.qcow2"
+    owner: libvirt-qemu
+    group: kvm
+    mode: "0660"
+  become: true
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning]
+
+- name: Refresh the libvirt storage pool
+  # Without this, virsh vol-list does not see a disk created behind its
+  # back with qemu-img, and later volume operations fail confusingly.
+  ansible.builtin.command: "virsh --connect qemu:///system pool-refresh {{ storage.libvirt_pool_name }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  tags: [provisioning]
+
+# ---------------------------------------------------------------------
+# Domains
+# ---------------------------------------------------------------------
+- name: Render the domain XML
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/libvirt/domain.xml.j2"
+    dest: "{{ storage.artifacts_dir }}/config/{{ item.name }}.xml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "xmllint --noout %s"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: forge_domain_xml
+  tags: [provisioning]
+
+- name: Define the domains
+  community.libvirt.virt:
+    command: define
+    xml: "{{ lookup('ansible.builtin.file', storage.artifacts_dir ~ '/config/' ~ item.name ~ '.xml') }}"
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in forge_existing_vms.list_vms or vm_lifecycle_redefine | bool
+  tags: [provisioning]
+
+- name: Redefine domains whose XML changed
+  # A change to vCPU, memory or boot order in config/poc.yml has to reach
+  # a domain that already exists, otherwise the desired state in Git and
+  # the running machine quietly diverge.
+  community.libvirt.virt:
+    command: define
+    xml: "{{ lookup('ansible.builtin.file', storage.artifacts_dir ~ '/config/' ~ item.item.name ~ '.xml') }}"
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_domain_xml.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - item is changed
+    - item.item.name in forge_existing_vms.list_vms
+  tags: [provisioning, drift]
+
+- name: Mark the domains autostart
+  community.libvirt.virt:
+    name: "{{ item.name }}"
+    autostart: true
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning]
+
+- name: Start the domains
+  community.libvirt.virt:
+    name: "{{ item.name }}"
+    state: running
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: vm_lifecycle_state == 'running'
+  register: forge_vm_started
+  tags: [provisioning]
+
+- name: Stop the domains
+  community.libvirt.virt:
+    name: "{{ item.name }}"
+    state: shutdown
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: vm_lifecycle_state == 'stopped'
+  tags: [provisioning]
+
+- name: Report how to watch the installation
+  ansible.builtin.debug:
+    msg: |
+      {{ item.name }} is running and network-booting.
+
+      Watch it:
+        virsh console {{ item.name }}            (serial console; Ctrl+] to exit)
+        virt-viewer --connect qemu:///system {{ item.name }}
+        curl -s {{ forge_boot_base_url }}/api/state/{{ item.mac_address | mac_hyphen }} | jq
+
+      Follow the boot server:
+        sudo tail -f {{ storage.log_dir }}/nginx/boot-access.log
+        sudo journalctl -u {{ forge_dnsmasq_service }} -f
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: vm_lifecycle_state == 'running'
+  tags: [provisioning]

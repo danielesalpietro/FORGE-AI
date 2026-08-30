@@ -1,0 +1,218 @@
+---
+# =====================================================================
+# ubuntu_media -- fetch, verify and unpack the Ubuntu Server ISO
+# =====================================================================
+# Ubuntu 24.04 ships no netboot.tar.gz for Server. The supported network
+# installation path is:
+#
+#   * boot the live-server kernel and initrd, extracted from the ISO;
+#   * let casper fetch the ISO itself over HTTP (url=... on the kernel
+#     command line) to find the squashfs.
+#
+# So this role extracts exactly two files and then publishes the whole
+# ISO over HTTP. See docs/UBUNTU-PROVISIONING.md.
+# =====================================================================
+
+- name: Check whether the ISO is already present
+  ansible.builtin.stat:
+    path: "{{ media.ubuntu.iso_path }}"
+    checksum_algorithm: sha256
+    get_checksum: "{{ ubuntu_media_verify_checksum | bool }}"
+  become: true
+  register: forge_ubuntu_iso
+  tags: [media, linux]
+
+- name: Fetch the official SHA256SUMS
+  # Only when the operator has not pinned a checksum in config/poc.yml.
+  # A pinned value is authoritative and works air-gapped.
+  ansible.builtin.uri:
+    url: "{{ ubuntu_media_sha256sums_url }}"
+    return_content: true
+    status_code: [200]
+  register: forge_ubuntu_sha256sums
+  when:
+    - ubuntu_media_verify_checksum | bool
+    - media.ubuntu.iso_sha256 | default('') | length == 0
+  retries: 3
+  delay: 5
+  until: forge_ubuntu_sha256sums is succeeded
+  tags: [media, linux]
+
+- name: Determine the expected checksum
+  ansible.builtin.set_fact:
+    forge_ubuntu_expected_sha256: >-
+      {{ media.ubuntu.iso_sha256
+         if media.ubuntu.iso_sha256 | default('') | length > 0
+         else ((forge_ubuntu_sha256sums.content | default('')).splitlines()
+               | select('search', media.ubuntu.iso_url | basename)
+               | map('regex_replace', '^([0-9a-f]{64}).*$', '\1')
+               | first | default('')) }}
+  when: ubuntu_media_verify_checksum | bool
+  tags: [media, linux]
+
+- name: Fail when no checksum could be established
+  ansible.builtin.fail:
+    msg: |
+      Could not determine the expected SHA-256 for {{ media.ubuntu.iso_url | basename }}.
+
+      Either pin it in config/poc.yml:
+        media:
+          ubuntu:
+            iso_sha256: "<64 hex characters>"
+
+      Or make {{ ubuntu_media_sha256sums_url }} reachable from this host.
+
+      Installing from an unverified ISO is exactly the "tampered ISO" threat in
+      docs/SECURITY.md. To accept it deliberately, set
+      -e ubuntu_media_verify_checksum=false.
+  when:
+    - ubuntu_media_verify_checksum | bool
+    - forge_ubuntu_expected_sha256 | default('') | length != 64
+  tags: [media, linux]
+
+- name: Download the Ubuntu Server ISO
+  ansible.builtin.get_url:
+    url: "{{ media.ubuntu.iso_url }}"
+    dest: "{{ media.ubuntu.iso_path }}"
+    checksum: "{{ ('sha256:' ~ forge_ubuntu_expected_sha256) if ubuntu_media_verify_checksum | bool else omit }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: "{{ ubuntu_media_download_timeout }}"
+    force: "{{ ubuntu_media_force_download | bool }}"
+  become: true
+  register: forge_ubuntu_download
+  when: >-
+    ubuntu_media_force_download | bool
+    or not forge_ubuntu_iso.stat.exists
+    or (ubuntu_media_verify_checksum | bool
+        and forge_ubuntu_iso.stat.checksum | default('') != forge_ubuntu_expected_sha256)
+  tags: [media, linux]
+
+- name: Confirm the ISO on disk matches the expected checksum
+  ansible.builtin.stat:
+    path: "{{ media.ubuntu.iso_path }}"
+    checksum_algorithm: sha256
+  become: true
+  register: forge_ubuntu_iso_verified
+  tags: [media, linux, validation]
+
+- name: Assert the ISO integrity
+  ansible.builtin.assert:
+    that:
+      - forge_ubuntu_iso_verified.stat.exists
+      - not ubuntu_media_verify_checksum | bool
+        or forge_ubuntu_iso_verified.stat.checksum == forge_ubuntu_expected_sha256
+    fail_msg: >-
+      {{ media.ubuntu.iso_path }} does not match the expected SHA-256
+      ({{ forge_ubuntu_expected_sha256 | default('unknown') }}). Delete the file and
+      re-run `make prepare-media`.
+    success_msg: "Ubuntu ISO verified: {{ forge_ubuntu_iso_verified.stat.checksum | default('unverified') }}"
+  tags: [media, linux, validation]
+
+# ---------------------------------------------------------------------
+# Extract the boot files
+# ---------------------------------------------------------------------
+- name: Create the casper directory under the HTTP root
+  ansible.builtin.file:
+    path: "{{ storage.http_root }}/ubuntu/casper"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [media, linux]
+
+- name: Extract the kernel and initrd from the ISO
+  # 7z reads an ISO 9660 image without needing a loop mount, which keeps
+  # this working inside a container and avoids leaving a stale mount
+  # behind when a play is interrupted.
+  ansible.builtin.command:
+    argv:
+      - 7z
+      - x
+      - -y
+      - "-o{{ storage.http_root }}/ubuntu"
+      - "{{ media.ubuntu.iso_path }}"
+      - "casper/vmlinuz"
+      - "casper/initrd"
+  become: true
+  args:
+    creates: "{{ storage.http_root }}/ubuntu/casper/initrd"
+  register: forge_ubuntu_extract
+  tags: [media, linux]
+
+- name: Confirm the extracted boot files are present and non-trivial
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/ubuntu/casper/{{ item }}"
+  become: true
+  loop: [vmlinuz, initrd]
+  register: forge_ubuntu_bootfiles
+  tags: [media, linux, validation]
+
+- name: Assert the boot files extracted correctly
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.size > 1000000
+    fail_msg: >-
+      {{ item.item }} is missing or implausibly small after extraction from
+      {{ media.ubuntu.iso_path }}. The ISO may be truncated or may not be a
+      live-server image (the desktop ISO has a different layout).
+    success_msg: "{{ item.item }}: {{ (item.stat.size / 1048576) | round(1) }} MB"
+  loop: "{{ forge_ubuntu_bootfiles.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [media, linux, validation]
+
+- name: Make the boot files readable over HTTP
+  ansible.builtin.file:
+    path: "{{ storage.http_root }}/ubuntu/casper/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: [vmlinuz, initrd]
+  tags: [media, linux]
+
+- name: Publish the ISO under the HTTP root
+  # casper fetches the ISO over HTTP (url= on the kernel command line).
+  # A hard link avoids a second multi-gigabyte copy; a symlink would not
+  # be followed out of the container's bind mount.
+  ansible.builtin.file:
+    src: "{{ media.ubuntu.iso_path }}"
+    dest: "{{ storage.http_root }}/iso/{{ media.ubuntu.iso_path | basename }}"
+    state: hard
+    force: true
+    # A hard link shares the inode, so this mode applies to the ISO
+    # itself. 0644 is what it already has; stating it keeps the task
+    # deterministic rather than inheriting whatever umask was in force.
+    mode: "0644"
+  become: true
+  register: forge_ubuntu_link
+  failed_when: false
+  tags: [media, linux]
+
+- name: Copy the ISO when a hard link is not possible
+  # Different filesystems for iso_dir and http_root, most often.
+  ansible.builtin.copy:
+    src: "{{ media.ubuntu.iso_path }}"
+    dest: "{{ storage.http_root }}/iso/{{ media.ubuntu.iso_path | basename }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: forge_ubuntu_link is failed
+  tags: [media, linux]
+
+- name: Publish the Ubuntu media facts
+  ansible.builtin.set_fact:
+    forge_ubuntu_media:
+      iso_path: "{{ media.ubuntu.iso_path }}"
+      sha256: "{{ forge_ubuntu_iso_verified.stat.checksum | default('unverified') }}"
+      size_bytes: "{{ forge_ubuntu_iso_verified.stat.size | default(0) }}"
+      kernel: "{{ storage.http_root }}/ubuntu/casper/vmlinuz"
+      initrd: "{{ storage.http_root }}/ubuntu/casper/initrd"
+    cacheable: true
+  tags: [always, media, linux]

@@ -1,0 +1,826 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/danielesalpietro/FORGE-AI/config/schema/poc.schema.json",
+  "title": "FORGE-AI GitOps provisioning configuration",
+  "description": "Structural contract for the merged result of config/defaults.yml + config/poc.yml. Semantic rules that JSON Schema cannot express (duplicate MAC/IP, CIDR membership, DHCP range containment, media existence) are enforced by tests/unit/test_config_validation.py and scripts/validate-config.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deployment",
+    "provisioning_network",
+    "storage",
+    "media",
+    "hosts",
+    "security"
+  ],
+  "$defs": {
+    "ipv4": {
+      "type": "string",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+    },
+    "cidr": {
+      "type": "string",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$"
+    },
+    "mac": {
+      "type": "string",
+      "description": "Locally administered unicast MAC. The 52:54:00 prefix is the QEMU/KVM OUI and keeps addresses deterministic.",
+      "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+    },
+    "hostname": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "absolute_path": {
+      "type": "string",
+      "pattern": "^/[^\\0]*$"
+    },
+    "optional_absolute_path": {
+      "type": "string",
+      "pattern": "^(|/[^\\0]*)$"
+    },
+    "sha256_or_empty": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{64})?$"
+    }
+  },
+  "properties": {
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "domain"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/hostname"
+        },
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}_[A-Z]{2}(\\.[A-Za-z0-9-]+)?$"
+        },
+        "keyboard_layout": {
+          "type": "string",
+          "pattern": "^[a-z]{2,8}$"
+        },
+        "keyboard_variant": {
+          "type": "string"
+        }
+      }
+    },
+    "control_plane": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "boot_http_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "gitea_http_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "gitea_ssh_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "semaphore_http_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "proxy_http_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "proxy_https_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "gitea_hostname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "semaphore_hostname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "boot_hostname": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "provisioning_network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "cidr",
+        "gateway",
+        "dhcp_start",
+        "dhcp_end"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,32}$"
+        },
+        "bridge": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,15}$"
+        },
+        "cidr": {
+          "$ref": "#/$defs/cidr"
+        },
+        "gateway": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "netmask": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "dhcp_start": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "dhcp_end": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "forward_mode": {
+          "type": "string",
+          "enum": [
+            "nat",
+            "isolated",
+            "route"
+          ]
+        },
+        "dns_servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ipv4"
+          }
+        },
+        "ntp_servers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "http_proxy": {
+          "type": "string"
+        },
+        "https_proxy": {
+          "type": "string"
+        },
+        "no_proxy": {
+          "type": "string"
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifacts_dir",
+        "http_root",
+        "tftp_root"
+      ],
+      "properties": {
+        "libvirt_pool_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "libvirt_pool_path": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "artifacts_dir": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "http_root": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "tftp_root": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "iso_dir": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "state_dir": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "log_dir": {
+          "$ref": "#/$defs/absolute_path"
+        },
+        "report_dir": {
+          "$ref": "#/$defs/absolute_path"
+        }
+      }
+    },
+    "pxe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "menu_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "max_install_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "enable_uefi_http_boot": {
+          "type": "boolean"
+        },
+        "enable_legacy_bios": {
+          "type": "boolean"
+        },
+        "ipxe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "distro",
+                "build"
+              ]
+            },
+            "build_ref": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ubuntu",
+        "windows"
+      ],
+      "properties": {
+        "ubuntu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "iso_url",
+            "iso_path"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+            },
+            "codename": {
+              "type": "string",
+              "pattern": "^[a-z]+$"
+            },
+            "architecture": {
+              "type": "string",
+              "enum": [
+                "amd64"
+              ]
+            },
+            "iso_url": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "iso_sha256": {
+              "$ref": "#/$defs/sha256_or_empty"
+            },
+            "iso_path": {
+              "$ref": "#/$defs/absolute_path"
+            },
+            "apt_mirror": {
+              "type": "string",
+              "pattern": "^https?://"
+            }
+          }
+        },
+        "windows": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "iso_path": {
+              "$ref": "#/$defs/optional_absolute_path"
+            },
+            "iso_sha256": {
+              "$ref": "#/$defs/sha256_or_empty"
+            },
+            "image_name": {
+              "type": "string"
+            },
+            "image_index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
+            "winpe_source": {
+              "type": "string",
+              "enum": [
+                "iso",
+                "adk",
+                "prebuilt"
+              ]
+            },
+            "winpe_prebuilt_path": {
+              "$ref": "#/$defs/optional_absolute_path"
+            },
+            "product_key": {
+              "type": "string",
+              "description": "Must stay empty in git. A non-empty value here fails the secret-hygiene check in tests and in .github/workflows/security.yml.",
+              "maxLength": 0
+            },
+            "virtio": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "iso_url": {
+                  "type": "string",
+                  "pattern": "^https://"
+                },
+                "iso_sha256": {
+                  "$ref": "#/$defs/sha256_or_empty"
+                },
+                "iso_path": {
+                  "$ref": "#/$defs/absolute_path"
+                },
+                "driver_paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "guest_agent_path": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "firmware": {
+          "type": "string",
+          "enum": [
+            "uefi",
+            "bios"
+          ]
+        },
+        "machine": {
+          "type": "string",
+          "enum": [
+            "q35",
+            "pc"
+          ]
+        },
+        "cpu_mode": {
+          "type": "string",
+          "enum": [
+            "host-passthrough",
+            "host-model",
+            "custom"
+          ]
+        },
+        "disk_bus": {
+          "type": "string",
+          "enum": [
+            "virtio",
+            "sata",
+            "scsi"
+          ]
+        },
+        "network_model": {
+          "type": "string",
+          "enum": [
+            "virtio",
+            "e1000e",
+            "rtl8139"
+          ]
+        },
+        "vcpu": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 262144
+        },
+        "disk_gb": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 4096
+        }
+      }
+    },
+    "hosts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "os_family",
+          "profile",
+          "ip_address",
+          "mac_address"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/hostname"
+          },
+          "os_family": {
+            "type": "string",
+            "enum": [
+              "linux",
+              "windows"
+            ]
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "ubuntu-server",
+              "windows-server"
+            ]
+          },
+          "ip_address": {
+            "$ref": "#/$defs/ipv4"
+          },
+          "mac_address": {
+            "$ref": "#/$defs/mac"
+          },
+          "vcpu": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 262144
+          },
+          "disk_gb": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 4096
+          },
+          "firmware": {
+            "type": "string",
+            "enum": [
+              "uefi",
+              "bios"
+            ]
+          },
+          "machine": {
+            "type": "string",
+            "enum": [
+              "q35",
+              "pc"
+            ]
+          },
+          "disk_bus": {
+            "type": "string",
+            "enum": [
+              "virtio",
+              "sata",
+              "scsi"
+            ]
+          },
+          "network_model": {
+            "type": "string",
+            "enum": [
+              "virtio",
+              "e1000e",
+              "rtl8139"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "cpu_mode": {
+            "type": "string",
+            "enum": [
+              "host-passthrough",
+              "host-model",
+              "custom"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "os_family": {
+                  "const": "linux"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "profile": {
+                  "const": "ubuntu-server"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "os_family": {
+                  "const": "windows"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "profile": {
+                  "const": "windows-server"
+                },
+                "memory_mb": {
+                  "minimum": 2048
+                },
+                "disk_gb": {
+                  "minimum": 40
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "users": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "automation_user": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+        },
+        "windows_admin_user": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,19}$"
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "management_cidrs"
+      ],
+      "properties": {
+        "ssh_authorized_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+|sk-ssh-ed25519@openssh\\.com) [A-Za-z0-9+/=]+( .*)?$"
+          }
+        },
+        "ssh_permit_root_login": {
+          "type": "string",
+          "enum": [
+            "no",
+            "prohibit-password"
+          ]
+        },
+        "ssh_password_authentication": {
+          "type": "string",
+          "enum": [
+            "no",
+            "yes"
+          ]
+        },
+        "winrm_transport": {
+          "type": "string",
+          "enum": [
+            "https",
+            "http",
+            "psrp"
+          ]
+        },
+        "winrm_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "winrm_cert_validation": {
+          "type": "string",
+          "enum": [
+            "validate",
+            "ignore"
+          ]
+        },
+        "management_cidrs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/cidr"
+          }
+        },
+        "windows_rdp_enabled": {
+          "type": "boolean"
+        },
+        "purge_answer_files_after_install": {
+          "type": "boolean"
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ubuntu": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "packages": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9+._-]*$"
+              }
+            },
+            "firewall_enabled": {
+              "type": "boolean"
+            },
+            "banner_text": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cis_demo_controls": {
+              "type": "boolean"
+            }
+          }
+        },
+        "windows": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "disable_smbv1": {
+              "type": "boolean"
+            },
+            "firewall_profiles_enabled": {
+              "type": "boolean"
+            },
+            "windows_update_mode": {
+              "type": "string",
+              "enum": [
+                "check_only",
+                "download",
+                "install",
+                "disabled"
+              ]
+            },
+            "defender_required": {
+              "type": "boolean"
+            },
+            "powershell_execution_policy": {
+              "type": "string",
+              "enum": [
+                "Restricted",
+                "AllSigned",
+                "RemoteSigned",
+                "Unrestricted"
+              ]
+            },
+            "install_qemu_guest_agent": {
+              "type": "boolean"
+            },
+            "event_log_max_size_mb": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 4096
+            }
+          }
+        }
+      }
+    },
+    "drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_playbooks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+\\.yml$"
+          }
+        },
+        "compliance_probes_enabled": {
+          "type": "boolean"
+        },
+        "auto_reconcile": {
+          "type": "boolean"
+        }
+      }
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "formats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown",
+              "html"
+            ]
+          }
+        },
+        "retain": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "gitops": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "github_repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "gitea_org": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "gitea_repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "gitea_admin_user": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "sync_strategy": {
+          "type": "string",
+          "enum": [
+            "mirror",
+            "push"
+          ]
+        },
+        "default_branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "semaphore_project_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "destroy_confirmation_token": {
+          "type": "string",
+          "minLength": 6
+        },
+        "abort_on_dhcp_conflict": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

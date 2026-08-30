@@ -1,0 +1,78 @@
+---
+# =====================================================================
+# Re-point an installed VM at its own disk
+# =====================================================================
+# Called by provision-ubuntu.yml and provision-windows.yml once a host
+# reports "installed". Re-renders the domain XML with forge_boot_target
+# = hd and redefines the domain.
+#
+# Failure modes, documented because they are the ones that actually bite:
+#
+#   * A redefinition only takes effect on the NEXT boot. A VM that is
+#     mid-reboot when this runs still uses the old order once. The state
+#     service covers that case: it answers "boot local" for an installed
+#     host regardless.
+#
+#   * UEFI NVRAM remembers its own boot order independently of libvirt.
+#     Ubuntu's autoinstall runs efibootmgr in a late-command to put
+#     "ubuntu" first; Windows Setup writes its own entry. If a VM still
+#     network-boots after this, the NVRAM file is the place to look:
+#     /var/lib/libvirt/qemu/nvram/<domain>_VARS.fd
+# =====================================================================
+
+- name: Re-render the domain XML with local disk as the first boot device
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/libvirt/domain.xml.j2"
+    dest: "{{ storage.artifacts_dir }}/config/{{ item.name }}.xml"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "xmllint --noout %s"
+  become: true
+  vars:
+    host: "{{ item }}"
+    forge_boot_target: hd
+    # The answer-file CD-ROM (windows_unattend, domain.xml.j2) has no
+    # reason to stay attached to an installed host: it carries the
+    # administrator password in a reversible encoding, matching why
+    # windows_unattend/tasks/purge.yml stops serving the same file over
+    # HTTP at this same point. A no-op for Linux hosts, which never had
+    # the disk to begin with.
+    windows_attach_unattend_cdrom: false
+  loop: "{{ forge_boot_order_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, validation]
+
+- name: Redefine the domains with the new boot order
+  community.libvirt.virt:
+    command: define
+    xml: "{{ lookup('ansible.builtin.file', storage.artifacts_dir ~ '/config/' ~ item.name ~ '.xml') }}"
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_boot_order_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, validation]
+
+- name: Confirm the running domain now prefers the local disk
+  ansible.builtin.command: "virsh --connect qemu:///system dumpxml {{ item.name }}"
+  become: true
+  changed_when: false
+  register: forge_boot_order_check
+  loop: "{{ forge_boot_order_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [provisioning, validation]
+
+- name: Report the effective boot order
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: first boot device is now
+      {{ (item.stdout | regex_findall("<boot dev='([a-z]+)'/>") | first) | default('unknown') }}
+      (a redefinition takes effect on the next boot; the state service already
+      answers "boot local" for this host regardless)
+  loop: "{{ forge_boot_order_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  tags: [provisioning, validation]

@@ -1,0 +1,64 @@
+# FORGE-AI drift report
+
+| Field | Value |
+|---|---|
+| Drift run ID | `{{ drift.run_id }}` |
+| Environment | `{{ drift.environment }}` |
+| Git commit (desired state) | `{{ drift.git_commit }}` |
+| Executed | `{{ drift.executed_at }}` |
+| Mode | `{{ drift.mode }}` |
+| Hosts checked | {{ drift.hosts | length }} |
+| Hosts with drift | **{{ drift.hosts | selectattr('drifted') | list | length }}** |
+| Verdict | **{{ 'DRIFT DETECTED' if drift.drifted else 'IN SYNC' }}** |
+
+{% if drift.drifted %}
+> Reconciliation is **not** automatic. Review the deviations below, then
+> run the `Reconcile drift` template in Semaphore (or `make reconcile`).
+{% endif %}
+
+## Per-host results
+
+{% for host in drift.hosts %}
+### {{ host.name }} — {{ 'DRIFTED' if host.drifted else 'in sync' }}
+
+- Reachable: `{{ host.reachable }}`
+- Changed resources (check mode): **{{ host.changed | length }}**
+- Compliance probe failures: **{{ host.probe_failures | length }}**
+
+{% if host.changed | length > 0 %}
+| Task | Resource | Detail |
+|---|---|---|
+{% for change in host.changed %}
+| `{{ change.task }}` | `{{ change.resource | default('-') }}` | {{ change.detail | default('would change') }} |
+{% endfor %}
+{% endif %}
+
+{% if host.probe_failures | length > 0 %}
+Read-only compliance probes that disagree with the desired state.
+These do **not** rely on Ansible check mode, so they also cover the
+modules where check mode is unsupported or only partially accurate:
+
+{% for probe in host.probe_failures %}
+- **{{ probe.name }}** — expected `{{ probe.expected }}`, observed `{{ probe.observed }}`
+{% endfor %}
+{% endif %}
+
+{% if host.check_mode_unsupported | length > 0 %}
+> Check-mode blind spots on this host: {{ host.check_mode_unsupported | join(', ') }}.
+> See docs/OPERATIONS.md, "check-mode limitations".
+{% endif %}
+
+{% endfor %}
+
+## Next steps
+
+1. Inspect the deviations above against the desired state in Git.
+2. If the deviation is legitimate, change the desired state and open a
+   pull request — do not reconcile it away.
+3. If the deviation is unwanted, run reconciliation:
+   `make reconcile` or the Semaphore `Reconcile drift` template.
+4. Re-run detection to confirm the host returns to `in sync`.
+
+---
+
+_JSON sibling: `{{ drift.json_path }}`_

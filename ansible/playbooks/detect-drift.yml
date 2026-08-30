@@ -1,0 +1,51 @@
+---
+# =====================================================================
+# Detect drift. Changes nothing.
+# =====================================================================
+#   make drift
+#   ansible-playbook playbooks/detect-drift.yml -e drift_fail_on_drift=true
+#
+# Two independent sources -- Ansible check mode and read-only compliance
+# probes -- because neither is sufficient alone. See
+# roles/drift_detection/README.md and docs/OPERATIONS.md.
+# =====================================================================
+- name: Collect the check-mode view of the desired state
+  hosts: forge_targets
+  gather_facts: true
+  check_mode: true
+  ignore_errors: true          # a check-mode failure is data, not a stop
+  tags: [drift]
+
+  tasks:
+    - name: Re-apply the Ubuntu baseline in check mode
+      ansible.builtin.include_role:
+        name: ubuntu_baseline
+      when: forge_host.os_family == 'linux'
+      tags: [drift]
+
+    - name: Re-apply the Windows baseline in check mode
+      ansible.builtin.include_role:
+        name: windows_baseline
+      when: forge_host.os_family == 'windows'
+      tags: [drift]
+
+- name: Evaluate drift on each target
+  hosts: forge_targets
+  gather_facts: false
+  tags: [drift]
+
+  roles:
+    - role: drift_detection
+      tags: [drift]
+
+- name: Write the drift report
+  hosts: control_plane
+  gather_facts: true
+  tags: [drift, reporting]
+
+  tasks:
+    - name: Assemble and write the drift report
+      ansible.builtin.include_role:
+        name: drift_detection
+        tasks_from: report.yml
+      tags: [drift, reporting]

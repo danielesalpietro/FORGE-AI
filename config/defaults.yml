@@ -1,0 +1,253 @@
+---
+# =====================================================================
+# FORGE-AI :: GitOps Provisioning PoC -- BASELINE DEFAULTS
+# =====================================================================
+# This file holds the *defaults* for every tunable in the platform.
+# It is loaded first; `config/poc.yml` (operator-owned, git-ignored) is
+# merged on top of it with a deep-merge (hash_behaviour=merge is NOT
+# used -- the merge is explicit, see ansible/playbooks/site.yml).
+#
+# Never put a secret in this file. Secrets live in Ansible Vault
+# (`ansible/inventories/poc/group_vars/all/vault.yml`) or in the
+# Semaphore Key Store. See docs/SECURITY.md.
+# =====================================================================
+
+deployment:
+  # Short identifier, used as a prefix for libvirt objects and reports.
+  name: poc
+  # Internal DNS domain served by dnsmasq on the provisioning network.
+  domain: poc.local
+  timezone: UTC
+  locale: en_US.UTF-8
+  keyboard_layout: us
+  keyboard_variant: ""
+
+control_plane:
+  # Address of the KVM host as seen *from the provisioning network*.
+  # This is the libvirt bridge address and must equal
+  # provisioning_network.gateway.
+  address: 192.168.250.1
+  # nginx that serves boot artifacts (kernels, initrd, WIM, answer files).
+  boot_http_port: 8080
+  # Docker Compose control plane (published on the host loopback by
+  # default; nginx in the compose stack fronts them with TLS).
+  gitea_http_port: 3000
+  gitea_ssh_port: 2222
+  semaphore_http_port: 3001
+  proxy_http_port: 8081
+  proxy_https_port: 8443
+  # Hostnames resolved by dnsmasq on the provisioning network and
+  # expected in /etc/hosts on the KVM host.
+  gitea_hostname: gitea.poc.local
+  semaphore_hostname: semaphore.poc.local
+  boot_hostname: boot.poc.local
+
+provisioning_network:
+  name: gitops-provisioning
+  # libvirt bridge device. Keep <= 15 characters (kernel IFNAMSIZ).
+  bridge: virbr-forge
+  cidr: 192.168.250.0/24
+  gateway: 192.168.250.1
+  netmask: 255.255.255.0
+  dhcp_start: 192.168.250.100
+  dhcp_end: 192.168.250.199
+  # libvirt network mode: "nat" gives guests outbound access (needed to
+  # reach the Ubuntu archive during autoinstall); "isolated" is airgapped
+  # and requires a local apt mirror. See docs/ARCHITECTURE.md.
+  forward_mode: nat
+  # Upstream resolvers handed out by dnsmasq. Empty list => dnsmasq
+  # forwards to the host's own resolvers.
+  dns_servers:
+    - 1.1.1.1
+    - 9.9.9.9
+  ntp_servers:
+    - ntp.ubuntu.com
+  # Optional proxy pushed into the installers and into apt/PowerShell.
+  http_proxy: ""
+  https_proxy: ""
+  no_proxy: "localhost,127.0.0.1,192.168.250.0/24,.poc.local"
+
+storage:
+  # Where qcow2 disks are created (must be a libvirt-visible directory).
+  libvirt_pool_name: default
+  libvirt_pool_path: /var/lib/libvirt/images
+  # Root for everything this project generates on the KVM host.
+  artifacts_dir: /srv/forge-ai
+  # Sub-trees under artifacts_dir. Referenced by nginx and dnsmasq.
+  http_root: /srv/forge-ai/http
+  tftp_root: /srv/forge-ai/tftp
+  iso_dir: /srv/forge-ai/iso
+  state_dir: /srv/forge-ai/state
+  log_dir: /srv/forge-ai/logs
+  report_dir: /srv/forge-ai/reports
+
+pxe:
+  # Seconds the iPXE menu waits before taking the default entry.
+  menu_timeout_ms: 5000
+  # Boot loop guard: after this many install attempts the host is
+  # forced to local disk and marked "failed". See docs/ARCHITECTURE.md.
+  max_install_attempts: 3
+  # Serve the UEFI HTTP Boot path (DHCP option 60 = HTTPClient) in
+  # addition to classic TFTP PXE. Requires OVMF >= 2022.
+  enable_uefi_http_boot: true
+  # Legacy BIOS PXE (undionly.kpxe over TFTP). Documented, not the
+  # primary tested path.
+  enable_legacy_bios: true
+  ipxe:
+    # Pinned upstream iPXE artifacts. Checksums are verified by
+    # scripts/verify-checksums.sh against pxe/ipxe/checksums.sha256.
+    source: distro          # "distro" = Debian/Ubuntu ipxe packages,
+                            # "build"  = compile from pinned git tag
+    build_ref: v1.21.1
+
+media:
+  ubuntu:
+    version: "24.04.3"
+    codename: noble
+    architecture: amd64
+    # Live-server ISO.
+    # iso_sha256 empty  => the checksum is fetched from the official
+    #                      https://releases.ubuntu.com/24.04/SHA256SUMS
+    #                      and verified before the ISO is used.
+    # iso_sha256 pinned => that value is authoritative and the remote
+    #                      SHA256SUMS file is ignored (air-gapped mode).
+    iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
+    iso_sha256: ""
+    # Local destination; downloaded by scripts/prepare-ubuntu-iso.sh.
+    iso_path: /srv/forge-ai/iso/ubuntu-24.04.3-live-server-amd64.iso
+    # Package mirror used during autoinstall.
+    apt_mirror: "http://archive.ubuntu.com/ubuntu"
+  windows:
+    # OPERATOR-SUPPLIED. No Microsoft media is redistributed by this
+    # repository. See docs/WINDOWS-PROVISIONING.md for how to obtain
+    # Windows Server Evaluation media legally.
+    iso_path: ""
+    # Optional: recorded and enforced when non-empty.
+    iso_sha256: ""
+    # Edition selected inside install.wim. `name` wins over `index`
+    # when both are set. NEVER assume index 1.
+    image_name: "Windows Server 2025 SERVERSTANDARD"
+    image_index: 0
+    # WinPE boot image. Either extracted from the ISO (sources/boot.wim)
+    # or built with the Windows ADK on a Windows workstation.
+    winpe_source: iso        # iso | adk | prebuilt
+    winpe_prebuilt_path: ""
+    product_key: ""          # leave empty for Evaluation media
+    virtio:
+      # Fedora-hosted virtio-win ISO (BSD/GPL licensed drivers).
+      # Pinned archive build. Leave iso_sha256 empty only for a first
+      # run: scripts/prepare-windows-iso.sh prints the computed digest
+      # so it can be pinned here (see docs/WINDOWS-PROVISIONING.md).
+      iso_url: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.266-1/virtio-win-0.1.266.iso"
+      iso_sha256: ""
+      iso_path: /srv/forge-ai/iso/virtio-win.iso
+      # Driver sub-paths inside the virtio ISO, injected into WinPE and
+      # offered to Windows Setup.
+      driver_paths:
+        - "viostor/2k25/amd64"
+        - "NetKVM/2k25/amd64"
+        - "vioscsi/2k25/amd64"
+        - "Balloon/2k25/amd64"
+        - "vioserial/2k25/amd64"
+        - "qemufwcfg/2k25/amd64"
+      guest_agent_path: "guest-agent/qemu-ga-x86_64.msi"
+
+defaults:
+  # Applied to every host entry that does not override them.
+  firmware: uefi
+  machine: q35
+  cpu_mode: host-passthrough
+  disk_bus: virtio
+  network_model: virtio
+  vcpu: 2
+  memory_mb: 4096
+  disk_gb: 40
+
+hosts: []
+
+users:
+  # Non-root automation account created on every Linux target.
+  automation_user: forgeops
+  # Windows local administrator name (renamed from the built-in account).
+  windows_admin_user: Administrator
+
+security:
+  # SSH public keys authorised on Linux targets. Populated by
+  # bootstrap/create-secrets.sh from the generated PoC key pair.
+  ssh_authorized_keys: []
+  ssh_permit_root_login: "no"
+  ssh_password_authentication: "no"
+  # WinRM transport for Ansible. https => 5986 with a self-signed
+  # certificate generated during specialize.
+  winrm_transport: https
+  winrm_port: 5986
+  # PoC-only: the specialize-phase certificate is self-signed, so the
+  # Ansible connection must be told to ignore validation. Flipping this
+  # to "validate" requires enrolling the cert in the runner trust store
+  # (documented in docs/SECURITY.md).
+  winrm_cert_validation: ignore
+  # Sources allowed to reach WinRM/SSH on the targets.
+  management_cidrs:
+    - 192.168.250.0/24
+  # Windows RDP is off unless explicitly enabled.
+  windows_rdp_enabled: false
+  # Marks the ephemeral answer-file window as auditable.
+  purge_answer_files_after_install: true
+
+baseline:
+  ubuntu:
+    packages:
+      - qemu-guest-agent
+      - python3
+      - python3-apt
+      - curl
+      - jq
+      - chrony
+      - ufw
+      - auditd
+      - unattended-upgrades
+    firewall_enabled: true
+    banner_text: "FORGE-AI Proof of Concept system -- managed state, do not modify by hand."
+    cis_demo_controls: true
+  windows:
+    disable_smbv1: true
+    firewall_profiles_enabled: true
+    windows_update_mode: check_only   # check_only | download | install | disabled
+    defender_required: true
+    powershell_execution_policy: RemoteSigned
+    install_qemu_guest_agent: true
+    event_log_max_size_mb: 128
+
+drift:
+  # Playbooks executed in check mode by detect-drift.yml.
+  check_playbooks:
+    - configure-targets.yml
+  # Extra read-only compliance probes that do not rely on check mode.
+  compliance_probes_enabled: true
+  # Reconciliation is manual by default; scheduled reconcile is opt-in.
+  auto_reconcile: false
+
+reporting:
+  formats:
+    - json
+    - markdown
+    - html
+  # Retained deployment reports (older ones are pruned by reporting role).
+  retain: 30
+
+gitops:
+  github_repository: "danielesalpietro/FORGE-AI"
+  gitea_org: forge-ai
+  gitea_repo: gitops-infrastructure
+  gitea_admin_user: forgeadmin
+  # "mirror" (Gitea pulls from GitHub) or "push" (Actions pushes to Gitea)
+  sync_strategy: mirror
+  default_branch: main
+  semaphore_project_name: "FORGE-AI GitOps PoC"
+
+safety:
+  # The destroy workflow refuses to run unless confirm_destroy matches.
+  destroy_confirmation_token: "DESTROY-POC"
+  # Pre-flight refuses to build the network if a foreign DHCP server
+  # answers on the provisioning bridge.
+  abort_on_dhcp_conflict: true

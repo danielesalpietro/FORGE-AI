@@ -1,0 +1,238 @@
+---
+# =====================================================================
+# windows_unattend -- render Autounattend.xml and the post-install set
+# =====================================================================
+# Three artefacts per host:
+#
+#   Autounattend.xml     delivered by wimboot into WinPE's System32
+#   SetupComplete.cmd    fetched during specialize, run at end of Setup
+#   Configure-WinRM.ps1  invoked by SetupComplete.cmd
+#
+# Autounattend.xml carries the administrator password in Windows'
+# Base64(UTF-16LE(password + field-name)) form. That is OBFUSCATION, not
+# encryption. The mitigations are: it is never written to the SMB share,
+# it lives only on the isolated provisioning segment, and it is purged
+# once the host reports "installed". docs/SECURITY.md records the
+# exposure window honestly.
+# =====================================================================
+
+- name: Determine whether a Windows target is configured
+  ansible.builtin.set_fact:
+    forge_windows_hosts: "{{ forge_hosts | selectattr('os_family', 'eq', 'windows') | list }}"
+  tags: [always, windows]
+
+- name: Skip the answer files when no Windows host is defined
+  ansible.builtin.meta: end_play
+  when: forge_windows_hosts | length == 0
+  tags: [windows]
+
+- name: Require a Windows administrator password
+  ansible.builtin.assert:
+    that:
+      - vault_windows_admin_password | default('') | length >= 14
+      - vault_windows_admin_password is search('[A-Z]')
+      - vault_windows_admin_password is search('[a-z]')
+      - vault_windows_admin_password is search('[0-9]')
+    fail_msg: |
+      vault_windows_admin_password is missing or does not meet the Windows Server
+      complexity policy (>= 14 characters, with upper case, lower case and a digit).
+
+      Windows Setup silently rejects a non-compliant password and leaves the
+      Administrator account with NO password set -- the host then installs
+      correctly but Ansible cannot authenticate to it.
+
+      Generate one:
+        ./bootstrap/create-secrets.sh
+    success_msg: "Windows administrator password meets the complexity policy"
+  no_log: true
+  tags: [windows, security]
+
+- name: Encode the administrator password for the answer file
+  ansible.builtin.set_fact:
+    windows_admin_password_encoded: "{{ vault_windows_admin_password | win_unattend_password('AdministratorPassword') }}"
+  no_log: true
+  tags: [windows, security]
+
+- name: Render Autounattend.xml
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/windows/Autounattend.xml.j2"
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/Autounattend.xml"
+    owner: root
+    group: root
+    # 0644 because the bootsrv container reads it as an unprivileged
+    # user. The control is the isolated network plus the purge, not the
+    # file mode -- see the role README.
+    mode: "0644"
+    validate: "xmllint --noout %s"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  tags: [windows, security]
+
+- name: Build the answer-file ISO for virtual media delivery  # noqa: no-handler
+  # Not a handler: the ISO must exist before vm_lifecycle defines/starts the domain later in the same play. Delivered as a
+  # CD-ROM (see domain.xml.j2, windows_attach_unattend_cdrom) instead of
+  # injected into WinPE via wimboot: bug 28 and bug 30
+  # (docs/logbook/06-fase6-provisioning-windows.md) were both caused by
+  # that injection path, and Windows Setup auto-detects an answer file
+  # at the root of an attached CD-ROM on its own, so this also drops
+  # the explicit /unattend: flag in startnet.cmd.j2 -- one less place
+  # for the injected path and the flag to disagree with each other.
+  ansible.builtin.command:
+    argv:
+      - genisoimage
+      - -quiet
+      - -o
+      - "{{ storage.libvirt_pool_path }}/{{ item.name }}-unattend.iso"
+      - -V
+      - UNATTEND
+      - -J
+      - -r
+      - "{{ storage.http_root }}/windows/{{ item.name }}/Autounattend.xml"
+  become: true
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+  no_log: true
+  tags: [windows, security]
+
+- name: Render SetupComplete.cmd
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/windows/SetupComplete.cmd.j2"
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/SetupComplete.cmd"
+    owner: root
+    group: root
+    mode: "0644"
+    newline_sequence: "\r\n"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows]
+
+- name: Render Configure-WinRM.ps1
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/windows/Configure-WinRM.ps1.j2"
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/Configure-WinRM.ps1"
+    owner: root
+    group: root
+    mode: "0644"
+    newline_sequence: "\r\n"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows, security]
+
+# ---------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------
+- name: Parse the rendered answer file and check its structure
+  ansible.builtin.command:
+    argv:
+      - xmllint
+      - --noout
+      - --xpath
+      - "boolean(/*[local-name()='unattend']/*[local-name()='settings'][@pass='windowsPE'])"
+      - "{{ storage.http_root }}/windows/{{ item.name }}/Autounattend.xml"
+  become: true
+  changed_when: false
+  register: forge_unattend_check
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows, validation]
+
+- name: Confirm every required pass is present
+  ansible.builtin.command:
+    argv:
+      - xmllint
+      - --noout
+      - --xpath
+      - "/*[local-name()='unattend']/*[local-name()='settings'][@pass='{{ item.1 }}']"
+      - "{{ storage.http_root }}/windows/{{ item.0.name }}/Autounattend.xml"
+  become: true
+  changed_when: false
+  failed_when: false
+  register: forge_unattend_passes
+  loop: "{{ forge_windows_hosts | product(['windowsPE', 'specialize', 'oobeSystem']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}:{{ item.1 }}"
+  tags: [windows, validation]
+
+- name: Assert the answer file carries every required pass
+  ansible.builtin.assert:
+    that:
+      - forge_unattend_passes.results | selectattr('rc', 'ne', 0) | list | length == 0
+    fail_msg: |
+      Autounattend.xml is missing a required configuration pass:
+      {% for result in forge_unattend_passes.results | selectattr('rc', 'ne', 0) %}
+        {{ result.item.0.name }}: pass '{{ result.item.1 }}'
+      {% endfor %}
+
+      Consequences of each missing pass:
+        windowsPE   -> Setup asks for the disk layout and the edition interactively
+        specialize  -> no computer name, and SetupComplete.cmd is never staged
+        oobeSystem  -> Setup stops at the region/keyboard screen forever
+    success_msg: "Autounattend.xml is structurally complete for every Windows host"
+  tags: [windows, validation]
+
+- name: Confirm the password is not present in cleartext
+  # A rendering mistake that dropped PlainText=false would put the real
+  # password into a file served over HTTP. Cheap to check, expensive to miss.
+  ansible.builtin.shell:
+    cmd: "grep -c -F -- {{ vault_windows_admin_password | quote }} {{ storage.http_root }}/windows/{{ item.name }}/Autounattend.xml || true"
+  become: true
+  changed_when: false
+  register: forge_unattend_cleartext
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  tags: [windows, security, validation]
+
+- name: Fail when a cleartext password reached the answer file
+  ansible.builtin.fail:
+    msg: >-
+      The administrator password appears in cleartext in a rendered
+      Autounattend.xml. The template must use PlainText=false with the
+      win_unattend_password filter. Delete
+      {{ storage.http_root }}/windows/*/Autounattend.xml and fix the template
+      before continuing.
+  when: forge_unattend_cleartext.results | selectattr('stdout', 'ne', '0') | list | length > 0
+  tags: [windows, security, validation]
+
+- name: Confirm the post-install scripts are served over HTTP
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/windows/{{ item.0.name }}/{{ item.1 }}"
+    method: HEAD
+    status_code: [200]
+  loop: "{{ forge_windows_hosts | product(['SetupComplete.cmd', 'Configure-WinRM.ps1']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1 }}"
+  register: forge_winscripts_http
+  changed_when: false
+  failed_when: false
+  tags: [windows, validation]
+
+- name: Assert the post-install scripts are reachable
+  ansible.builtin.assert:
+    that:
+      - forge_winscripts_http.results | selectattr('status', 'ne', 200) | list | length == 0
+    fail_msg: |
+      The specialize pass downloads these over HTTP and cannot proceed without them:
+      {% for result in forge_winscripts_http.results | selectattr('status', 'ne', 200) %}
+        {{ forge_boot_base_url }}/windows/{{ result.item.0.name }}/{{ result.item.1 }} -> HTTP {{ result.status }}
+      {% endfor %}
+      Without SetupComplete.cmd the host installs but never gets a WinRM listener.
+    success_msg: "Post-install scripts served for every Windows host"
+  tags: [windows, validation]

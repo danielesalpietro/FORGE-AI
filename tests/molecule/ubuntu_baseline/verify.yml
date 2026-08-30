@@ -1,0 +1,103 @@
+---
+# =====================================================================
+# Verify the baseline produced the state it claims to
+# =====================================================================
+# Deliberately reads the system rather than trusting the converge run's
+# exit code: a task can report "ok" and still not have had the intended
+# effect if something else overrides it.
+# =====================================================================
+- name: Verify the Ubuntu baseline
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Read the effective sshd configuration
+      ansible.builtin.command: sshd -T
+      changed_when: false
+      register: sshd_effective
+
+    - name: Assert the SSH policy is in force
+      ansible.builtin.assert:
+        that:
+          - "'permitrootlogin no' in sshd_effective.stdout"
+          - "'passwordauthentication no' in sshd_effective.stdout"
+          - "'pubkeyauthentication yes' in sshd_effective.stdout"
+        fail_msg: >-
+          sshd is running but its effective configuration does not match the
+          desired state. A later drop-in in /etc/ssh/sshd_config.d/ may be
+          overriding 10-forge-ai.conf -- files are read in lexical order.
+
+    - name: Read the automation account
+      ansible.builtin.getent:
+        database: passwd
+        key: forgeops
+
+    - name: Assert the sudo policy installed and is syntactically valid
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/60-forge-ai-forgeops
+      changed_when: false
+
+    - name: Read the authorised keys
+      ansible.builtin.slurp:
+        src: /home/forgeops/.ssh/authorized_keys
+      register: authorized_keys
+
+    - name: Assert the key from the desired state is present
+      ansible.builtin.assert:
+        that:
+          - "'MOLECULEMOLECULE' in (authorized_keys.content | b64decode)"
+
+    - name: Assert the login banner matches the desired state
+      ansible.builtin.slurp:
+        src: /etc/issue.net
+      register: banner
+
+    - name: Check the banner content
+      ansible.builtin.assert:
+        that:
+          - "'FORGE-AI Molecule scenario' in (banner.content | b64decode)"
+
+    - name: Assert the desired-state marker was written
+      ansible.builtin.slurp:
+        src: /etc/forge-ai/state.json
+      register: state_marker
+
+    - name: Check the marker records the commit
+      ansible.builtin.assert:
+        that:
+          - (state_marker.content | b64decode | from_json).git_commit == 'molecule'
+          - (state_marker.content | b64decode | from_json).host is defined
+
+    - name: Assert the audit rules installed
+      ansible.builtin.stat:
+        path: /etc/audit/rules.d/50-forge-ai.rules
+      register: audit_rules
+
+    - name: Check the audit rules exist
+      ansible.builtin.assert:
+        that:
+          - audit_rules.stat.exists
+          - audit_rules.stat.mode == '0640'
+
+    - name: Assert the CIS-inspired sysctl settings were applied
+      ansible.builtin.stat:
+        path: /etc/sysctl.d/60-forge-ai.conf
+      register: sysctl_file
+
+    - name: Check the sysctl file exists
+      ansible.builtin.assert:
+        that:
+          - sysctl_file.stat.exists
+
+    - name: Run the health check the role installed
+      ansible.builtin.command: /usr/local/bin/forge-health --json
+      changed_when: false
+      failed_when: false
+      register: health
+
+    - name: Report the health result
+      ansible.builtin.debug:
+        msg: >-
+          forge-health: {{ (health.stdout | from_json).status | default('unparseable') }}
+          ({{ (health.stdout | from_json).failed | default('?') }} failing)
+      when: health.stdout | default('') | length > 0

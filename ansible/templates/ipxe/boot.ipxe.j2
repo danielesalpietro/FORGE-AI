@@ -1,0 +1,90 @@
+#!ipxe
+# =====================================================================
+# FORGE-AI :: iPXE entry point
+# Served over HTTP by the boot server; handed to every iPXE client by
+# dnsmasq (dhcp-boot=tag:ipxe,...). Rendered from
+# ansible/templates/ipxe/boot.ipxe.j2 -- do not edit on the host.
+# =====================================================================
+# Deployment: {{ forge_deployment_id | default('manual') }}
+# Commit:     {{ forge_git_commit | default('unknown') }}
+
+set base {{ forge_boot_base_url }}
+set state-url ${base}/state
+set menu-url ${base}/boot/menu.ipxe
+set log-url ${base}/api/log
+
+# ---------------------------------------------------------------------
+# Console + identification
+# ---------------------------------------------------------------------
+# Every divider below uses '=', never '-': iPXE's echo parses a leading
+# '-' as an option flag (its usage is "echo [-n|--n] [...]"), and a
+# divider made of dashes was rejected as "Unrecognised option ...",
+# aborting the whole script with no fallback -- confirmed on real
+# hardware via `virsh screenshot` (serial console shows nothing for
+# this guest; the framebuffer was the only way to see the error).
+echo
+echo ===============================================================
+echo  FORGE-AI GitOps provisioning  --  environment {{ deployment.name }}
+echo ===============================================================
+echo  MAC        : ${net0/mac}
+echo  IP         : ${net0/ip}
+echo  Platform   : ${platform}  Arch: ${buildarch}
+echo  Boot server: ${base}
+echo ===============================================================
+echo
+
+# Report that this client reached iPXE. Failure is non-fatal: the boot
+# must proceed even when the state service is down.
+#
+# Built as a plain query string, not params/param/##params: this
+# distro-packaged iPXE build (1.21.1+git-20220113.fbbdc3926-0ubuntu2)
+# does not include the forms-POST feature at all -- "params: command
+# not found" on real hardware, confirmed via `virsh screenshot`, which
+# aborted the script exactly like the dash-divider bug (bug 19) did.
+imgfetch --name ipxe-start "${log-url}?mac=${net0/mac}&event=ipxe-start&platform=${platform}&arch=${buildarch}" || echo [warn] state service unreachable, continuing
+imgfree ipxe-start || goto after_log
+:after_log
+
+# ---------------------------------------------------------------------
+# Per-host dispatch
+# ---------------------------------------------------------------------
+# ${mac:hexhyp} renders 52:54:00:25:00:21 as 52-54-00-25-00-21.
+#
+# The state service answers with an iPXE script that reflects the
+# host's position in the lifecycle:
+#
+#   new | installing  -> chain the installer for this host's profile
+#   installed | ready -> boot the local disk (no reinstall)
+#   failed            -> boot the local disk and print why
+#
+# Every request to /state/<mac>.ipxe increments an attempt counter.
+# Once pxe.max_install_attempts ({{ pxe.max_install_attempts }}) is
+# exceeded the service refuses to hand out an installer again. That is
+# the reinstall-loop guard; see docs/ARCHITECTURE.md.
+set host-state-url ${state-url}/${mac:hexhyp}.ipxe
+echo Requesting provisioning state: ${host-state-url}
+chain --autofree ${host-state-url} || goto unknown_host
+
+:unknown_host
+echo
+echo [warn] No provisioning state for ${net0/mac}.
+echo        This MAC is not in config/poc.yml, or the state service is down.
+echo        Falling back to the interactive menu in {{ (pxe.menu_timeout_ms / 1000) | round | int }}s.
+echo
+chain --autofree ${menu-url} || goto localboot
+
+:localboot
+# `sanboot --drive 0x80` is a BIOS/legacy INT13 trick; these guests are
+# UEFI, and iPXE reports "No such device" for it here (bug 22, confirmed
+# on real hardware via `virsh screenshot`). Plain `exit` returns control
+# to firmware, which then proceeds to the domain's own next boot option
+# (hd) -- the same fix applied to menu.ipxe.j2 and state-service's
+# script_local().
+echo Booting from local disk...
+exit
+
+:shell
+echo
+echo [error] Nothing left to boot. Dropping to the iPXE shell.
+echo         Useful: 'ifstat', 'route', 'dhcp', 'chain ${menu-url}'
+shell

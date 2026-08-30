@@ -1,0 +1,104 @@
+---
+# =====================================================================
+# Assemble and write the drift report
+# =====================================================================
+# Runs once, on the control host, after every target has been checked.
+# =====================================================================
+
+- name: Create the drift report directory
+  ansible.builtin.file:
+    path: "{{ drift_report_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [drift, reporting]
+
+- name: Assemble the drift document
+  ansible.builtin.set_fact:
+    drift:
+      run_id: "{{ forge_deployment_id }}"
+      environment: "{{ deployment.name }}"
+      git_commit: "{{ forge_git_commit }}"
+      git_branch: "{{ forge_git_branch }}"
+      executed_at: "{{ ansible_date_time.iso8601 }}"
+      executed_by: "{{ forge_operator }}"
+      mode: "{{ 'check-mode + compliance probes' if drift_run_probes | bool else 'check-mode only' }}"
+      hosts: >-
+        {{ groups['forge_targets'] | default([])
+           | map('extract', hostvars, 'forge_drift_host_result')
+           | select('defined') | list }}
+      json_path: "{{ drift_report_dir }}/drift-{{ forge_deployment_id }}.json"
+  tags: [drift, reporting]
+
+- name: Compute the overall verdict
+  ansible.builtin.set_fact:
+    drift: "{{ drift | combine({'drifted': (drift.hosts | selectattr('drifted') | list | length) > 0}) }}"
+  tags: [drift, reporting]
+
+- name: Write the machine-readable drift report
+  ansible.builtin.copy:
+    content: "{{ drift | to_nice_json }}\n"
+    dest: "{{ drift.json_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [drift, reporting]
+
+- name: Write the human-readable drift report
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/report/drift-report.md.j2"
+    dest: "{{ drift_report_dir }}/drift-{{ forge_deployment_id }}.md"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [drift, reporting]
+
+- name: Update the latest-report symlinks
+  ansible.builtin.file:
+    src: "{{ drift_report_dir }}/drift-{{ forge_deployment_id }}.{{ item }}"
+    dest: "{{ drift_report_dir }}/latest.{{ item }}"
+    state: link
+    force: true
+  become: true
+  loop: [json, md]
+  tags: [drift, reporting]
+
+- name: Report the verdict
+  ansible.builtin.debug:
+    msg: |
+      ==========================================================
+       DRIFT {{ 'DETECTED' if drift.drifted else 'NOT DETECTED' }}
+      ==========================================================
+       hosts checked   : {{ drift.hosts | length }}
+       hosts drifted   : {{ drift.hosts | selectattr('drifted') | list | length }}
+       mode            : {{ drift.mode }}
+
+       Markdown : {{ drift_report_dir }}/latest.md
+       JSON     : {{ drift_report_dir }}/latest.json
+      {% if drift.drifted %}
+
+       Reconciliation is NOT automatic. Review the report, then:
+         make reconcile
+       or run the "Reconcile drift" template in Semaphore.
+
+       If a deviation is legitimate, change the desired state in Git and
+       open a pull request -- do not reconcile it away.
+      {% endif %}
+      ==========================================================
+  tags: [drift, reporting]
+
+- name: Fail the task when drift was found
+  # Off by default. Turn it on for a scheduled Semaphore drift check so
+  # the task goes red and the notification fires.
+  ansible.builtin.fail:
+    msg: >-
+      Drift detected on {{ drift.hosts | selectattr('drifted') | map(attribute='name') | join(', ') }}.
+      See {{ drift_report_dir }}/latest.md
+  when:
+    - drift_fail_on_drift | bool
+    - drift.drifted
+  tags: [drift, reporting]

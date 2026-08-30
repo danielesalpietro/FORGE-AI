@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  =====================================================================
+  FORGE-AI :: Windows Server unattended answer file
+  Host: {{ host.name }} ({{ host.ip_address }} / {{ host.mac_address }})
+  Rendered from ansible/templates/windows/Autounattend.xml.j2
+  Deployment: {{ forge_deployment_id | default('manual') }}
+  Commit:     {{ forge_git_commit | default('unknown') }}
+
+  Delivered by wimboot straight into \Windows\System32 of the WinPE
+  image; it is never written to a shared directory on the KVM host and
+  never enters Git.
+
+  The administrator password below is Base64 of
+  (UTF-16LE password + "AdministratorPassword"), which is the encoding
+  Windows Setup expects when PlainText is false. That is OBFUSCATION,
+  NOT ENCRYPTION - anyone holding this file can recover the password.
+  Mitigations and the exposure window are documented in
+  docs/SECURITY.md, "answer-file credential exposure".
+  =====================================================================
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+
+  <!-- =================================================================
+       PASS 1: windowsPE
+       Runs inside WinPE. Because Setup is invoked as
+       `setup.exe /unattend:<file>`, this pass is honoured in full.
+       ================================================================= -->
+  <settings pass="windowsPE">
+
+    <component name="Microsoft-Windows-International-Core-WinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>{{ windows_ui_language | default('en-US') }}</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>{{ windows_input_locale | default('0409:00000409') }}</InputLocale>
+      <SystemLocale>{{ windows_system_locale | default('en-US') }}</SystemLocale>
+      <UILanguage>{{ windows_ui_language | default('en-US') }}</UILanguage>
+      <UserLocale>{{ windows_user_locale | default('en-US') }}</UserLocale>
+    </component>
+
+    <!-- VirtIO storage/network drivers offered to Setup. The paths are
+         relative to the SMB export of the extracted VirtIO ISO. -->
+    <component name="Microsoft-Windows-PnpCustomizationsWinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <DriverPaths>
+{% for driver_path in media.windows.virtio.driver_paths %}
+        <PathAndCredentials wcm:action="add" wcm:keyValue="{{ '%02d' | format(loop.index) }}"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Path>\\{{ provisioning_network.gateway }}\{{ virtio_media_share_name | default('virtio') }}\{{ driver_path | replace('/', '\\') }}</Path>
+        </PathAndCredentials>
+{% endfor %}
+      </DriverPaths>
+    </component>
+
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <!-- UEFI / GPT layout. Partition 3 takes the remainder of the
+           disk. Setup wipes disk 0 again here; startnet.cmd already
+           cleaned it so a stale ESP cannot survive a retry. -->
+      <DiskConfiguration>
+        <WillShowUI>OnError</WillShowUI>
+        <Disk wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <!-- EFI System Partition -->
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>EFI</Type>
+              <Size>{{ windows_esp_size_mb | default(260) }}</Size>
+            </CreatePartition>
+            <!-- Microsoft Reserved Partition -->
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
+              <Type>MSR</Type>
+              <Size>{{ windows_msr_size_mb | default(16) }}</Size>
+            </CreatePartition>
+            <!-- Windows -->
+            <CreatePartition wcm:action="add">
+              <Order>3</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Label>System</Label>
+              <Format>FAT32</Format>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>3</Order>
+              <PartitionID>3</PartitionID>
+              <Label>Windows</Label>
+              <Letter>C</Letter>
+              <Format>NTFS</Format>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+{% if media.windows.image_name | default('') | length > 0 %}
+              <!-- Edition selected by NAME. Verified against the WIM
+                   metadata by ansible/roles/windows_media before this
+                   file is rendered; `make windows-images` prints the
+                   available names. Index 1 is never assumed. -->
+              <Key>/IMAGE/NAME</Key>
+              <Value>{{ media.windows.image_name }}</Value>
+{% else %}
+              <Key>/IMAGE/INDEX</Key>
+              <Value>{{ media.windows.image_index }}</Value>
+{% endif %}
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>3</PartitionID>
+          </InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>{{ windows_registered_owner | default('FORGE-AI PoC') }}</FullName>
+        <Organization>{{ windows_registered_org | default('FORGE-AI') }}</Organization>
+{% if media.windows.product_key | default('') | length > 0 %}
+        <ProductKey>
+          <Key>{{ media.windows.product_key }}</Key>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
+{% else %}
+        <!-- No ProductKey element: Evaluation media installs unkeyed.
+             Activation is explicitly OUT OF SCOPE for this PoC - see
+             docs/LIMITATIONS.md and docs/SECURITY.md. -->
+{% endif %}
+      </UserData>
+
+      <EnableFirewall>true</EnableFirewall>
+      <EnableNetwork>true</EnableNetwork>
+      <Restart>Restart</Restart>
+    </component>
+  </settings>
+
+  <!-- =================================================================
+       PASS 2: offlineServicing
+       ================================================================= -->
+  <settings pass="offlineServicing">
+    <component name="Microsoft-Windows-LUA-Settings"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <!-- Keep UAC on. Ansible reaches this host over WinRM as a local
+           administrator, which is unaffected. -->
+      <EnableLUA>true</EnableLUA>
+    </component>
+  </settings>
+
+  <!-- =================================================================
+       PASS 3: specialize
+       The image is on disk and the VirtIO NIC is bound, so this is the
+       first moment the machine can talk to the boot server. Its only
+       job is to stage the post-install scripts; the real work happens
+       in SetupComplete.cmd, which runs with full networking and full
+       service availability.
+       ================================================================= -->
+  <settings pass="specialize">
+
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <ComputerName>{{ host.name | upper | truncate(15, true, '') }}</ComputerName>
+      <TimeZone>{{ windows_timezone | default('UTC') }}</TimeZone>
+      <RegisteredOwner>{{ windows_registered_owner | default('FORGE-AI PoC') }}</RegisteredOwner>
+      <RegisteredOrganization>{{ windows_registered_org | default('FORGE-AI') }}</RegisteredOrganization>
+    </component>
+
+    <component name="Microsoft-Windows-TerminalServices-LocalSessionManager"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <!-- RDP is off unless security.windows_rdp_enabled is true. -->
+      <fDenyTSConnections>{{ 'false' if security.windows_rdp_enabled | default(false) else 'true' }}</fDenyTSConnections>
+    </component>
+
+    <component name="Microsoft-Windows-TerminalServices-RDP-WinStationExtensions"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <UserAuthentication>1</UserAuthentication>
+      <SecurityLayer>2</SecurityLayer>
+    </component>
+
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <Description>FORGE-AI: create the setup scripts directory</Description>
+          <Path>cmd.exe /c md C:\Windows\Setup\Scripts</Path>
+          <WillReboot>Never</WillReboot>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>2</Order>
+          <Description>FORGE-AI: stage the provisioning marker</Description>
+          <Path>cmd.exe /c md C:\ProgramData\forge-ai</Path>
+          <WillReboot>Never</WillReboot>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>3</Order>
+          <Description>FORGE-AI: download SetupComplete.cmd</Description>
+          <!-- curl.exe ships in the installed OS from Server 2019
+               onwards. PowerShell is the fallback for older images. -->
+          <Path>cmd.exe /c curl.exe --silent --show-error --retry 5 --retry-delay 5 --max-time 120 -o C:\Windows\Setup\Scripts\SetupComplete.cmd {{ forge_boot_base_url }}/windows/{{ host.name }}/SetupComplete.cmd || powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri '{{ forge_boot_base_url }}/windows/{{ host.name }}/SetupComplete.cmd' -OutFile 'C:\Windows\Setup\Scripts\SetupComplete.cmd'"</Path>
+          <WillReboot>Never</WillReboot>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>4</Order>
+          <Description>FORGE-AI: download Configure-WinRM.ps1</Description>
+          <Path>cmd.exe /c curl.exe --silent --show-error --retry 5 --retry-delay 5 --max-time 120 -o C:\Windows\Setup\Scripts\Configure-WinRM.ps1 {{ forge_boot_base_url }}/windows/{{ host.name }}/Configure-WinRM.ps1 || powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri '{{ forge_boot_base_url }}/windows/{{ host.name }}/Configure-WinRM.ps1' -OutFile 'C:\Windows\Setup\Scripts\Configure-WinRM.ps1'"</Path>
+          <WillReboot>Never</WillReboot>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>5</Order>
+          <Description>FORGE-AI: report state=installed</Description>
+          <Path>cmd.exe /c curl.exe --silent --max-time 30 --retry 3 -X POST -H "Content-Type: application/json"{% if forge_state_token | default('') | length > 0 %} -H "X-Forge-Token: {{ forge_state_token }}"{% endif %} -d "{\"state\":\"installed\",\"source\":\"windows-specialize\",\"host\":\"{{ host.name }}\"}" {{ forge_boot_base_url }}/api/state/{{ host.mac_address | replace(':', '-') }}</Path>
+          <WillReboot>Never</WillReboot>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+
+  <!-- =================================================================
+       PASS 4: oobeSystem
+       ================================================================= -->
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+        <NetworkLocation>Work</NetworkLocation>
+      </OOBE>
+
+      <UserAccounts>
+        <AdministratorPassword>
+          <!-- Base64(UTF-16LE(password + "AdministratorPassword")).
+               PlainText=false selects that encoding. See the header
+               comment: this is obfuscation, not encryption. -->
+          <Value>{{ windows_admin_password_encoded }}</Value>
+          <PlainText>false</PlainText>
+        </AdministratorPassword>
+      </UserAccounts>
+
+      <!-- No AutoLogon. SetupComplete.cmd runs as SYSTEM at the end of
+           Setup and does not need an interactive session, so leaving
+           the console at the logon screen keeps the host closer to a
+           production posture. -->
+      <TimeZone>{{ windows_timezone | default('UTC') }}</TimeZone>
+    </component>
+  </settings>
+
+</unattend>

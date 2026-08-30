@@ -1,0 +1,33 @@
+---
+# Minimum host resources. The two shipped targets need 12 GB of RAM and
+# 120 GB of disk between them; these floors add headroom for the control
+# plane containers and the extracted media.
+prereq_min_memory_mb: 16384
+prereq_min_free_disk_gb: 150
+prereq_min_cpu_cores: 4
+prereq_required_ubuntu_versions: ["24.04"]
+
+# Commands that must exist on the KVM host.
+prereq_required_commands:
+  - virsh
+  - virt-install
+  - qemu-img
+  - dnsmasq
+  - docker
+  - curl
+  - jq
+  - sha256sum
+
+# Ports the control plane binds. A conflict here is a hard stop: two
+# processes on 8080 means half the boot requests silently reach the
+# wrong server.
+prereq_required_free_ports:
+  - { port: 8080, address: "{{ provisioning_network.gateway }}", service: "boot artefact server" }
+  - { port: 69, address: "{{ provisioning_network.gateway }}", service: "TFTP (dnsmasq)", protocol: udp }
+
+# Probe the provisioning bridge for a competing DHCP server before
+# creating anything. Controlled by safety.abort_on_dhcp_conflict.
+prereq_dhcp_probe_timeout: 8
+
+# Set true to report findings without failing. `make check` uses this.
+prereq_report_only: false

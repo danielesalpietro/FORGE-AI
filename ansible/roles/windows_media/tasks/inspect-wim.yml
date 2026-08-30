@@ -1,0 +1,132 @@
+---
+# =====================================================================
+# Validate the selected Windows edition BEFORE installing anything
+# =====================================================================
+# "Index 1 is the edition I want" is wrong on almost every Windows
+# Server ISO: index 1 is normally Standard *Core* (no desktop, no GUI
+# tools), and the mistake only becomes visible after a 20-minute
+# installation and a failed Ansible connection.
+#
+# wimlib-imagex (the `wimtools` package) reads WIM and ESD metadata on
+# Linux without needing DISM or a Windows machine.
+# =====================================================================
+
+- name: Read the image metadata from the installation image
+  # wimlib prints this XML as UTF-16 with a BOM, verbatim -- piping it
+  # through iconv first is required, not cosmetic: ansible.builtin.command
+  # captures stdout and round-trips it through its own JSON-based module
+  # protocol, which demands valid UTF-8. Raw UTF-16 bytes decoded as UTF-8
+  # produce lone surrogates, and Ansible refuses to deserialize those
+  # ("Refusing to deserialize an invalid UTF8 string ... surrogates not
+  # allowed") before this task's own regex_replace ever gets a chance to
+  # run -- confirmed on real hardware, and by inspecting the raw output
+  # with `file`/`xxd` (UTF-16 little-endian, BOM FF FE).
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      wimlib-imagex info {{ forge_windows_install_image | quote }} --xml | iconv -f UTF-16 -t UTF-8
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  register: forge_wim_xml
+  tags: [media, windows, validation]
+
+- name: Extract the edition list
+  ansible.builtin.set_fact:
+    forge_wim_editions: >-
+      {{ forge_wim_xml.stdout
+         | regex_findall('<IMAGE INDEX="(\d+)">.*?<NAME>([^<]+)</NAME>', multiline=True, ignorecase=True) }}
+  tags: [media, windows, validation]
+
+- name: Fall back to the human-readable listing when the XML parse yields nothing
+  ansible.builtin.command: "wimlib-imagex info {{ forge_windows_install_image }}"
+  become: true
+  changed_when: false
+  register: forge_wim_plain
+  when: forge_wim_editions | length == 0
+  tags: [media, windows, validation]
+
+- name: Extract the edition list from the plain listing
+  ansible.builtin.set_fact:
+    forge_wim_editions: >-
+      {{ forge_wim_plain.stdout | regex_findall('Index:\s+(\d+)[\s\S]*?Name:\s+([^\n]+)') }}
+  when: forge_wim_editions | length == 0
+  tags: [media, windows, validation]
+
+- name: Show every edition inside the installation image
+  ansible.builtin.debug:
+    msg: |
+      Editions available in {{ forge_windows_install_image | basename }}:
+      {% for index, name in forge_wim_editions %}
+        [{{ index }}] {{ name | trim }}
+      {% endfor %}
+
+      config/poc.yml selects:
+        image_name  = "{{ media.windows.image_name | default('') }}"
+        image_index = {{ media.windows.image_index | default(0) }}
+  tags: [media, windows, validation]
+
+- name: Resolve the configured edition to an index
+  ansible.builtin.set_fact:
+    forge_windows_selected_index: >-
+      {{ (forge_wim_editions | selectattr(1, 'search', '^' ~ (media.windows.image_name | regex_escape) ~ '$', ignorecase=True)
+          | map(attribute=0) | first | default(''))
+         if media.windows.image_name | default('') | length > 0
+         else media.windows.image_index }}
+    forge_windows_selected_edition: >-
+      {{ media.windows.image_name
+         if media.windows.image_name | default('') | length > 0
+         else (forge_wim_editions | selectattr(0, 'eq', media.windows.image_index | string)
+               | map(attribute=1) | first | default('')) }}
+  tags: [media, windows, validation]
+
+- name: Refuse to install an edition that is not in the image
+  ansible.builtin.fail:
+    msg: |
+      The Windows edition selected in config/poc.yml is not present in
+      {{ forge_windows_install_image }}.
+
+        requested name  : "{{ media.windows.image_name | default('(none)') }}"
+        requested index : {{ media.windows.image_index | default(0) }}
+
+      Available editions:
+      {% for index, name in forge_wim_editions %}
+        [{{ index }}] {{ name | trim }}
+      {% endfor %}
+
+      Copy one of the names above verbatim into config/poc.yml:
+
+        media:
+          windows:
+            image_name: "{{ (forge_wim_editions | map(attribute=1) | first | default('Windows Server 2025 SERVERSTANDARD')) | trim }}"
+
+      Names are case-sensitive in practice and differ between ISOs. Index 1 is
+      normally Standard Core, which has no desktop and no GUI management tools --
+      do not assume it.
+
+      `make windows-images` prints this same list without running a deployment.
+  when: >-
+    forge_windows_selected_index | default('') | string | length == 0
+    or forge_windows_selected_edition | default('') | trim | length == 0
+  tags: [media, windows, validation]
+
+- name: Confirm the resolved edition
+  ansible.builtin.debug:
+    msg: >-
+      Windows Setup will install index {{ forge_windows_selected_index }}:
+      "{{ forge_windows_selected_edition | trim }}"
+  tags: [media, windows, validation]
+
+- name: Warn when a Core edition was selected
+  ansible.builtin.debug:
+    msg: |
+      "{{ forge_windows_selected_edition | trim }}" looks like a Server Core image.
+
+      Core is a perfectly valid target -- Ansible over WinRM works fine on it --
+      but there is no desktop, so a demo that expects to show Server Manager on
+      the console will disappoint. Choose a "(Desktop Experience)" edition if
+      that matters for the demonstration.
+  when: >-
+    'CORE' in (forge_windows_selected_edition | default('') | upper)
+    or 'DESKTOP' not in (forge_windows_selected_edition | default('') | upper)
+  tags: [media, windows, validation]

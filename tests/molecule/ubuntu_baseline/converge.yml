@@ -1,0 +1,22 @@
+---
+- name: Apply the Ubuntu baseline
+  hosts: all
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Provide the facts the role expects from a real host
+      ansible.builtin.set_fact:
+        # The role asserts that the machine calls itself what the
+        # inventory says. In a container the two already agree.
+        forge_host: "{{ forge_host }}"
+      tags: [always]
+
+  tasks:
+    - name: Include the ubuntu_baseline role
+      ansible.builtin.include_role:
+        name: ubuntu_baseline
+      # qemu-guest-agent has no virtio-serial channel in a container,
+      # and the firewall tasks are excluded in molecule.yml.
+      vars:
+        baseline: "{{ baseline }}"

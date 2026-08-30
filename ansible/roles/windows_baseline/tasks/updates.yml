@@ -1,0 +1,74 @@
+---
+# =====================================================================
+# Windows Update policy
+# =====================================================================
+# baseline.windows.windows_update_mode controls what happens:
+#
+#   check_only  search and report, install nothing   (default)
+#   download    search and download, install nothing
+#   install     search, download and install         (slow; reboots)
+#   disabled    do not touch Windows Update at all
+#
+# "install" is not the default deliberately. A Windows Update run on a
+# fresh Server image routinely takes 30-60 minutes and reboots two or
+# three times, which is not what anyone wants in the middle of a
+# demonstration. The report says how many updates are outstanding so the
+# posture is visible either way.
+# =====================================================================
+
+- name: Skip Windows Update entirely
+  ansible.builtin.debug:
+    msg: >-
+      baseline.windows.windows_update_mode is 'disabled'; Windows Update was not
+      queried. This host's patch level is unknown to the deployment report.
+  when: baseline.windows.windows_update_mode == 'disabled'
+  tags: [windows, security]
+
+- name: Query Windows Update
+  ansible.windows.win_updates:
+    category_names: "{{ windows_update_categories }}"
+    state: "{{ 'searched' if baseline.windows.windows_update_mode == 'check_only'
+               else 'downloaded' if baseline.windows.windows_update_mode == 'download'
+               else 'installed' }}"
+    reboot: "{{ baseline.windows.windows_update_mode == 'install' and windows_baseline_allow_reboot | bool }}"
+    reboot_timeout: "{{ windows_baseline_reboot_timeout }}"
+  vars:
+    windows_update_categories:
+      - SecurityUpdates
+      - CriticalUpdates
+      - UpdateRollups
+      - DefinitionUpdates
+  register: forge_win_updates
+  when: baseline.windows.windows_update_mode != 'disabled'
+  failed_when: false
+  check_mode: false
+  tags: [windows, security]
+
+- name: Report the update posture
+  ansible.builtin.debug:
+    msg: |
+      Windows Update on {{ inventory_hostname }} (mode: {{ baseline.windows.windows_update_mode }}):
+        found     : {{ forge_win_updates.found_update_count | default(0) }}
+        installed : {{ forge_win_updates.installed_update_count | default(0) }}
+        failed    : {{ forge_win_updates.failed_update_count | default(0) }}
+        reboot required: {{ forge_win_updates.reboot_required | default(false) }}
+      {% if forge_win_updates.failed | default(false) %}
+
+      The update search itself failed. On an isolated provisioning network with
+      no route to Microsoft Update this is expected, and it is why the mode
+      defaults to check_only rather than install.
+      {% endif %}
+  when: baseline.windows.windows_update_mode != 'disabled'
+  tags: [windows, security]
+
+- name: Publish the update posture for the report
+  ansible.builtin.set_fact:
+    forge_windows_update_status:
+      mode: "{{ baseline.windows.windows_update_mode }}"
+      found: "{{ forge_win_updates.found_update_count | default(0) }}"
+      installed: "{{ forge_win_updates.installed_update_count | default(0) }}"
+      failed: "{{ forge_win_updates.failed_update_count | default(0) }}"
+      reboot_required: "{{ forge_win_updates.reboot_required | default(false) }}"
+    cacheable: true
+  when: baseline.windows.windows_update_mode != 'disabled'
+  tags: [windows, security]

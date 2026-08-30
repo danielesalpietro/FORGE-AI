@@ -1,0 +1,69 @@
+---
+# =====================================================================
+# Microsoft Defender
+# =====================================================================
+# Validated, not configured. Defender's own defaults on Windows Server
+# are sound; the failure worth catching is Defender being *off*, which
+# on a freshly imaged machine usually means a third-party agent got half
+# installed or the image was tampered with.
+# =====================================================================
+
+- name: Read the Defender status
+  ansible.windows.win_shell: |
+    $status = Get-MpComputerStatus -ErrorAction Stop
+    [ordered]@{
+      AntivirusEnabled       = $status.AntivirusEnabled
+      RealTimeProtection     = $status.RealTimeProtectionEnabled
+      AntispywareEnabled     = $status.AntispywareEnabled
+      SignatureAge           = $status.AntivirusSignatureAge
+      ServiceRunning         = (Get-Service WinDefend).Status -eq 'Running'
+      TamperProtection       = $status.IsTamperProtected
+    } | ConvertTo-Json -Compress
+  register: forge_defender_raw
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [windows, security, validation]
+
+- name: Parse the Defender status
+  ansible.builtin.set_fact:
+    forge_defender: "{{ forge_defender_raw.stdout | from_json }}"
+  when: forge_defender_raw.rc == 0 and forge_defender_raw.stdout | default('') | length > 0
+  tags: [windows, security, validation]
+
+- name: Report the Defender status
+  ansible.builtin.debug:
+    msg: >-
+      Defender on {{ inventory_hostname }}:
+      antivirus={{ forge_defender.AntivirusEnabled | default('unknown') }},
+      real-time={{ forge_defender.RealTimeProtection | default('unknown') }},
+      service={{ forge_defender.ServiceRunning | default('unknown') }},
+      signatures {{ forge_defender.SignatureAge | default('?') }} day(s) old
+  tags: [windows, security, validation]
+
+- name: Assert Defender is running
+  ansible.builtin.assert:
+    that:
+      - forge_defender is defined
+      - forge_defender.ServiceRunning | default(false)
+      - forge_defender.AntivirusEnabled | default(false)
+    fail_msg: >-
+      Microsoft Defender is not active on {{ inventory_hostname }}. On a freshly
+      imaged Windows Server that normally means a third-party agent partially
+      installed itself, or the image is not what it claims to be.
+      Set baseline.windows.defender_required: false to accept this deliberately.
+      Inspect with: Get-MpComputerStatus
+    success_msg: "Defender active with real-time protection"
+  when: baseline.windows.defender_required | default(true)
+  tags: [windows, security, validation]
+
+- name: Note stale signatures
+  ansible.builtin.debug:
+    msg: >-
+      Defender signatures on {{ inventory_hostname }} are
+      {{ forge_defender.SignatureAge }} days old. Expected on an isolated
+      provisioning network with no route to Microsoft Update -- not a finding.
+  when:
+    - forge_defender is defined
+    - (forge_defender.SignatureAge | default(0) | int) > 7
+  tags: [windows, security, validation]

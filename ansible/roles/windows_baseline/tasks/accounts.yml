@@ -1,0 +1,108 @@
+---
+# =====================================================================
+# Local administrator governance
+# =====================================================================
+# The PoC uses a single local administrator whose password lives in
+# Ansible Vault. That is a real limitation, not a design: it is a shared
+# static credential.
+#
+# Windows LAPS is the answer, and it is documented rather than
+# implemented because LAPS requires either Entra ID or Active Directory
+# to store the rotated password -- neither of which exists in a
+# standalone workgroup PoC. docs/SECURITY.md, "WinRM credential theft",
+# records this and the readiness checks below show what is already in
+# place for it.
+# =====================================================================
+
+- name: Confirm the administrator account is the expected one
+  ansible.windows.win_shell: |
+    $admins = Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop |
+              Select-Object -ExpandProperty Name
+    $admins -join ';'
+  register: forge_win_admins
+  changed_when: false
+  check_mode: false
+  tags: [windows, security, validation]
+
+- name: Report the local administrators
+  ansible.builtin.debug:
+    msg: >-
+      Local Administrators on {{ inventory_hostname }}:
+      {{ forge_win_admins.stdout | trim | replace(';', ', ') }}
+  tags: [windows, security, validation]
+
+- name: Warn about unexpected administrator group members
+  ansible.builtin.debug:
+    msg: |
+      More than one account is in the local Administrators group:
+        {{ forge_win_admins.stdout | trim | replace(';', ', ') }}
+
+      On a freshly provisioned PoC target only the built-in administrator
+      ({{ users.windows_admin_user }}) is expected. An extra member is worth
+      explaining before it is accepted as desired state.
+  when: (forge_win_admins.stdout | trim | split(';') | select | list | length) > 1
+  tags: [windows, security, validation]
+
+- name: Disable the built-in Guest account
+  ansible.windows.win_user:
+    name: Guest
+    account_disabled: true
+    state: present
+  failed_when: false
+  tags: [windows, security]
+
+- name: Apply the local account policy
+  community.windows.win_security_policy:
+    section: "{{ item.section }}"
+    key: "{{ item.key }}"
+    value: "{{ item.value }}"
+  loop:
+    # Deny network logon to local accounts that are not the management
+    # account. On a workgroup host this is the main lateral-movement
+    # control available without a domain.
+    - { section: System Access, key: LimitBlankPasswordUse, value: 1 }
+    - { section: System Access, key: MinimumPasswordLength, value: 14 }
+    - { section: System Access, key: PasswordComplexity, value: 1 }
+    - { section: System Access, key: LockoutBadCount, value: 10 }
+    - { section: System Access, key: ResetLockoutCount, value: 15 }
+    - { section: System Access, key: LockoutDuration, value: 15 }
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+  failed_when: false
+  tags: [windows, security]
+
+- name: Check LAPS readiness
+  # Windows LAPS is in-box from Windows Server 2019 (April 2023 update)
+  # onward. It needs a directory to store the rotated password, which a
+  # workgroup PoC does not have -- so this reports readiness rather than
+  # configuring it.
+  ansible.windows.win_shell: |
+    $module = Get-Module -ListAvailable -Name LAPS -ErrorAction SilentlyContinue
+    $partOfDomain = (Get-CimInstance Win32_ComputerSystem).PartOfDomain
+    [ordered]@{
+      LapsModulePresent = [bool]$module
+      LapsVersion       = if ($module) { $module.Version.ToString() } else { 'n/a' }
+      DomainJoined      = $partOfDomain
+      CanEnableLaps     = ([bool]$module -and $partOfDomain)
+    } | ConvertTo-Json -Compress
+  register: forge_laps_raw
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [windows, security, validation]
+
+- name: Report LAPS readiness
+  ansible.builtin.debug:
+    msg: |
+      Windows LAPS readiness on {{ inventory_hostname }}:
+        module present : {{ (forge_laps_raw.stdout | from_json).LapsModulePresent | default('unknown') }}
+        domain joined  : {{ (forge_laps_raw.stdout | from_json).DomainJoined | default('unknown') }}
+        can enable     : {{ (forge_laps_raw.stdout | from_json).CanEnableLaps | default(false) }}
+
+      LAPS is NOT configured by this PoC. It requires Entra ID or Active
+      Directory to store the rotated password, and this host is a standalone
+      workgroup member. Until then the local administrator password is a shared
+      static credential held in Ansible Vault -- see docs/SECURITY.md,
+      "WinRM credential theft".
+  when: forge_laps_raw.stdout | default('') | length > 0
+  tags: [windows, security, validation]

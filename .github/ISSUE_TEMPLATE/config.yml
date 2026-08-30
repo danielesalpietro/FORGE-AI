@@ -1,0 +1,17 @@
+---
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/danielesalpietro/FORGE-AI/security/advisories/new
+    about: >-
+      Report privately, never in a public issue. See SECURITY.md for what
+      is in scope -- note that this is a proof of concept and several
+      known trade-offs are documented rather than fixed.
+  - name: Troubleshooting guide
+    url: https://github.com/danielesalpietro/FORGE-AI/blob/main/docs/TROUBLESHOOTING.md
+    about: >-
+      Covers PXE timeouts, iPXE chainload loops, missing VirtIO drivers,
+      the wrong WIM index, an unavailable WinRM listener and more.
+  - name: Known limitations
+    url: https://github.com/danielesalpietro/FORGE-AI/blob/main/docs/LIMITATIONS.md
+    about: What this proof of concept deliberately does not do, and why.

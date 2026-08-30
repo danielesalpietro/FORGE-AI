@@ -1,0 +1,58 @@
+#!ipxe
+# =====================================================================
+# FORGE-AI :: Ubuntu Server autoinstall boot script
+# Host: {{ host.name }} ({{ host.mac_address }} / {{ host.ip_address }})
+# Rendered from ansible/templates/ipxe/host-ubuntu-install.ipxe.j2
+# =====================================================================
+# There is no supported netboot.tar.gz for Ubuntu Server 24.04, so the
+# tested path is: boot the live-server kernel + initrd extracted from
+# the ISO, and let casper fetch the ISO itself over HTTP (url=...).
+# The Subiquity autoinstall answer file is served as a NoCloud seed
+# directory -- the trailing slash on s= is mandatory.
+
+set base {{ forge_boot_base_url }}
+set hostname {{ host.name }}
+set seed ${base}/ubuntu/{{ host.name }}/
+set iso ${base}/iso/{{ media.ubuntu.iso_path | basename }}
+
+echo
+echo [{{ host.name }}] Ubuntu Server {{ media.ubuntu.version }} unattended installation
+echo   seed : ${seed}
+echo   iso  : ${iso}
+echo
+
+kernel ${base}/ubuntu/casper/vmlinuz || goto failed
+initrd ${base}/ubuntu/casper/initrd  || goto failed
+
+imgargs vmlinuz \
+  initrd=initrd \
+  ip=dhcp \
+  url=${iso} \
+  autoinstall \
+  ds=nocloud;s=${seed} \
+  cloud-config-url=/dev/null \
+  net.ifnames=0 \
+  fsck.mode=skip \
+  console=tty0 console=ttyS0,115200n8 \
+{% if provisioning_network.http_proxy | default('') | length > 0 %}
+  http_proxy={{ provisioning_network.http_proxy }} \
+{% endif %}
+  ---
+
+boot || goto failed
+
+:failed
+echo
+echo [error] {{ host.name }}: the Ubuntu installer failed to start.
+echo         Check that these URLs return HTTP 200 from this client:
+echo           ${base}/ubuntu/casper/vmlinuz
+echo           ${base}/ubuntu/casper/initrd
+echo           ${seed}user-data
+echo           ${iso}
+echo         See docs/TROUBLESHOOTING.md ("Ubuntu cannot retrieve user-data").
+params
+param mac ${net0/mac}
+param event install-boot-failed
+imgfetch --name failnote ${base}/api/log##params || echo [warn] state service unreachable
+prompt --timeout 20000 Press a key to drop to the iPXE shell...
+shell

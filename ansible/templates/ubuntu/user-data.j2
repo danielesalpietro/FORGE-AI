@@ -1,0 +1,244 @@
+#cloud-config
+# =====================================================================
+# FORGE-AI :: Ubuntu Server Subiquity autoinstall answer file
+# Host: {{ host.name }} ({{ host.ip_address }})
+# Rendered from ansible/templates/ubuntu/user-data.j2
+#
+# Served as a NoCloud seed over the isolated provisioning network only.
+# It contains a hashed bootstrap password (never a cleartext one) and
+# is removed by ansible/roles/ubuntu_autoinstall once the host reaches
+# the "configuring" state. See docs/SECURITY.md, "answer-file exposure".
+# =====================================================================
+# Deployment : {{ forge_deployment_id | default('manual') }}
+# Commit     : {{ forge_git_commit | default('unknown') }}
+autoinstall:
+  version: 1
+
+  # Fail loudly instead of dropping to an interactive prompt.
+  interactive-sections: []
+
+  locale: {{ deployment.locale }}
+  keyboard:
+    layout: {{ deployment.keyboard_layout }}
+    variant: "{{ deployment.keyboard_variant | default('') }}"
+  timezone: {{ deployment.timezone }}
+
+  refresh-installer:
+    update: false
+
+  # -------------------------------------------------------------------
+  # Network -- the DHCP reservation in dnsmasq pins {{ host.ip_address }}
+  # to {{ host.mac_address }}, so DHCP yields a deterministic address.
+  # -------------------------------------------------------------------
+  network:
+    version: 2
+    ethernets:
+      primary:
+        match:
+          macaddress: "{{ host.mac_address }}"
+        set-name: eth0
+        dhcp4: true
+        dhcp4-overrides:
+          use-dns: true
+          use-ntp: true
+          send-hostname: true
+          hostname: {{ host.name }}
+
+{% if provisioning_network.http_proxy | default('') | length > 0 %}
+  proxy: {{ provisioning_network.http_proxy }}
+{% endif %}
+  apt:
+    primary:
+      - arches: [default]
+        uri: {{ media.ubuntu.apt_mirror }}
+    geoip: false
+
+  # -------------------------------------------------------------------
+  # Storage -- LVM on a single GPT disk, UEFI ESP created by curtin.
+  # 'match: size: largest' avoids hard-coding /dev/vda.
+  # -------------------------------------------------------------------
+  storage:
+    config:
+      - type: disk
+        id: disk0
+        match:
+          size: largest
+        ptable: gpt
+        wipe: superblock-recursive
+        preserve: false
+        grub_device: false
+      - type: partition
+        id: part-esp
+        device: disk0
+        size: 1G
+        flag: boot
+        grub_device: true
+        preserve: false
+      - type: format
+        id: fmt-esp
+        volume: part-esp
+        fstype: fat32
+        preserve: false
+      - type: mount
+        id: mnt-esp
+        device: fmt-esp
+        path: /boot/efi
+      - type: partition
+        id: part-boot
+        device: disk0
+        size: 2G
+        preserve: false
+      - type: format
+        id: fmt-boot
+        volume: part-boot
+        fstype: ext4
+        preserve: false
+      - type: mount
+        id: mnt-boot
+        device: fmt-boot
+        path: /boot
+      - type: partition
+        id: part-lvm
+        device: disk0
+        size: -1
+        preserve: false
+      - type: lvm_volgroup
+        id: vg0
+        name: vg-{{ deployment.name }}
+        devices: [part-lvm]
+        preserve: false
+      - type: lvm_partition
+        id: lv-root
+        name: lv-root
+        volgroup: vg0
+        # Leave headroom in the VG so the demo can show lvextend.
+        size: {{ (host.disk_gb | int * 0.7) | round | int }}G
+        preserve: false
+      - type: format
+        id: fmt-root
+        volume: lv-root
+        fstype: ext4
+        preserve: false
+      - type: mount
+        id: mnt-root
+        device: fmt-root
+        path: /
+
+  # -------------------------------------------------------------------
+  # Identity -- the password hash comes from Ansible Vault at render
+  # time. A cleartext password never touches Git, the seed, or a log.
+  # -------------------------------------------------------------------
+  identity:
+    hostname: {{ host.name }}
+    realname: "FORGE-AI automation account"
+    username: {{ users.automation_user }}
+    password: "{{ ubuntu_bootstrap_password_hash }}"
+
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+{% for key in security.ssh_authorized_keys %}
+      - "{{ key }}"
+{% endfor %}
+
+  packages:
+{% for package in baseline.ubuntu.packages %}
+    - {{ package }}
+{% endfor %}
+
+  package_update: true
+  package_upgrade: false
+
+  # -------------------------------------------------------------------
+  # In-target user-data: applied by cloud-init on the installed system.
+  # -------------------------------------------------------------------
+  user-data:
+    disable_root: true
+    preserve_hostname: false
+    hostname: {{ host.name }}
+    fqdn: {{ host.name }}.{{ deployment.domain }}
+    timezone: {{ deployment.timezone }}
+    ntp:
+      enabled: true
+      servers:
+{% for server in provisioning_network.ntp_servers %}
+        - {{ server }}
+{% endfor %}
+    write_files:
+      - path: /etc/issue.net
+        permissions: "0644"
+        content: |
+          {{ baseline.ubuntu.banner_text }}
+      - path: /etc/forge-ai/provisioning.json
+        permissions: "0644"
+        content: |
+          {
+            "deployment_id": "{{ forge_deployment_id | default('manual') }}",
+            "git_commit": "{{ forge_git_commit | default('unknown') }}",
+            "host": "{{ host.name }}",
+            "profile": "{{ host.profile }}",
+            "provisioned_by": "forge-ai-autoinstall"
+          }
+    runcmd:
+      - [ systemctl, enable, --now, qemu-guest-agent ]
+
+  # -------------------------------------------------------------------
+  # late-commands run inside /target at the end of the installation.
+  # -------------------------------------------------------------------
+  late-commands:
+    # Harden sshd before the very first boot rather than after it.
+    - |
+      cat > /target/etc/ssh/sshd_config.d/10-forge-ai.conf <<'SSHD'
+      # Managed by FORGE-AI autoinstall
+      PermitRootLogin {{ security.ssh_permit_root_login }}
+      PasswordAuthentication {{ security.ssh_password_authentication }}
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      X11Forwarding no
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      Banner /etc/issue.net
+      SSHD
+    - curtin in-target --target=/target -- systemctl enable ssh
+    - curtin in-target --target=/target -- mkdir -p /etc/forge-ai
+    # The autoinstall identity block puts the automation user in the
+    # sudo group, but that alone still requires ITS OWN password for
+    # `sudo` -- a password Ansible never has (it only ever gets an SSH
+    # key). Without this, every `become: true` task fails with "timed
+    # out waiting for ping module test: Missing sudo password"
+    # (confirmed on real hardware: provision-ubuntu.yml's "Wait for the
+    # SSH service to accept a connection" task, 15+ minutes of retries
+    # before giving up). NOPASSWD is scoped to this one automation
+    # account, not the whole sudo group.
+    - |
+      cat > /target/etc/sudoers.d/90-forge-ai-automation <<'SUDOERS'
+      {{ users.automation_user }} ALL=(ALL) NOPASSWD:ALL
+      SUDOERS
+      chmod 0440 /target/etc/sudoers.d/90-forge-ai-automation
+    # Preserve the installer logs on the installed system for the report.
+    - cp -a /var/log/installer /target/var/log/forge-ai-installer || true
+    # Tell the state service the installation finished. The reboot that
+    # follows must NOT land back in the installer, so this call is what
+    # flips the iPXE state to "installed".
+    - |
+      curl --silent --show-error --max-time 20 --retry 5 --retry-delay 3 \
+        -X POST -H 'Content-Type: application/json' \
+        {% if forge_state_token | default('') | length > 0 %}-H 'X-Forge-Token: {{ forge_state_token }}' {% endif %}\
+        -d '{"state":"installed","source":"ubuntu-autoinstall","host":"{{ host.name }}"}' \
+        {{ forge_boot_base_url }}/api/state/{{ host.mac_address | replace(':', '-') }} \
+        || echo "FORGE-AI: state callback failed; the host may reinstall on next boot"
+    # Belt and braces: make the local disk the first boot device from
+    # inside the guest's own NVRAM as well.
+    - curtin in-target --target=/target -- bash -c 'command -v efibootmgr >/dev/null && efibootmgr -o $(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? ubuntu$/\1/p" | head -1) || true'
+
+  shutdown: reboot
+
+  error-commands:
+    - |
+      curl --silent --max-time 20 -X POST -H 'Content-Type: application/json' \
+        {% if forge_state_token | default('') | length > 0 %}-H 'X-Forge-Token: {{ forge_state_token }}' {% endif %}\
+        -d '{"state":"failed","source":"ubuntu-autoinstall","host":"{{ host.name }}","detail":"subiquity error-commands fired"}' \
+        {{ forge_boot_base_url }}/api/state/{{ host.mac_address | replace(':', '-') }} || true
+    - tar czf - /var/log/installer | curl --silent --max-time 60 -X POST --data-binary @- \
+        {{ forge_boot_base_url }}/api/log/{{ host.name }}/installer.tar.gz || true

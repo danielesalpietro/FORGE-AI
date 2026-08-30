@@ -1,0 +1,70 @@
+---
+# =====================================================================
+# Automation account and sudo policy
+# =====================================================================
+# The account already exists -- the autoinstall seed created it. This
+# file makes its properties explicit desired state so drift in group
+# membership, shell or sudo policy is detected rather than assumed.
+# =====================================================================
+
+- name: Ensure the automation account exists with the expected properties
+  ansible.builtin.user:
+    name: "{{ users.automation_user }}"
+    shell: /bin/bash
+    groups: "{{ forge_linux_admin_group }}"
+    append: true
+    state: present
+    create_home: true
+  become: true
+  tags: [linux, security]
+
+- name: Install the authorised keys
+  ansible.posix.authorized_key:
+    user: "{{ users.automation_user }}"
+    key: "{{ security.ssh_authorized_keys | join('\n') }}"
+    state: present
+    # Authoritative: a key added by hand on the target is drift and is
+    # removed. That is the point of a GitOps desired state.
+    exclusive: true
+  become: true
+  tags: [linux, security]
+
+- name: Grant scoped passwordless sudo
+  # NOPASSWD is needed because Ansible connects with a key and has no
+  # password to offer. The scope is the whole of root, which is honest:
+  # a configuration management account is a privileged account. The
+  # production recommendation (a command allowlist) is in the README.
+  ansible.builtin.copy:
+    content: |
+      # Managed by FORGE-AI - ansible/roles/ubuntu_baseline
+      # {{ users.automation_user }} is the configuration management account.
+      # It authenticates with an SSH key and therefore cannot answer a
+      # password prompt.
+      {{ users.automation_user }} ALL=(ALL) NOPASSWD:ALL
+      Defaults:{{ users.automation_user }} !requiretty
+      Defaults:{{ users.automation_user }} log_output
+    dest: "/etc/sudoers.d/60-forge-ai-{{ users.automation_user }}"
+    owner: root
+    group: root
+    mode: "0440"
+    # A malformed sudoers file locks everyone out of root, including the
+    # session that would fix it. visudo -cf refuses to install one.
+    validate: "visudo -cf %s"
+  become: true
+  tags: [linux, security]
+
+- name: Lock the root account password
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+  become: true
+  tags: [linux, security]
+
+- name: Remove any sudo rule left by a previous tool
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop:
+    - /etc/sudoers.d/90-cloud-init-users
+  tags: [linux, security]

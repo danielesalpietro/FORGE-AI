@@ -1,0 +1,49 @@
+---
+# =====================================================================
+# Remove the NoCloud seed after a successful installation
+# =====================================================================
+# Included by provision-ubuntu.yml once the host reports "installed".
+# The seed holds a password hash rather than a cleartext password, but
+# leaving it served indefinitely widens the exposure window for no
+# benefit -- the installer has already consumed it.
+#
+# Failure mode to be aware of: if the host later needs to reinstall, the
+# seed must be re-rendered. deploy-pxe-stack.yml does that, and
+# provision-ubuntu.yml runs it first, so the normal path is safe.
+# =====================================================================
+
+- name: Remove the rendered seed for installed hosts
+  ansible.builtin.file:
+    path: "{{ storage.http_root }}/ubuntu/{{ item }}/{{ file }}"
+    state: absent
+  become: true
+  loop: "{{ forge_installed_linux_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  vars:
+    file: user-data
+  when: ubuntu_autoinstall_purge_seed | bool
+  tags: [provisioning, linux, security]
+
+- name: Record that the seed was purged
+  ansible.builtin.copy:
+    content: |
+      The NoCloud seed for this host was removed at {{ ansible_date_time.iso8601 }}
+      after the host reported state=installed.
+
+      Deployment : {{ forge_deployment_id }}
+      Commit     : {{ forge_git_commit }}
+
+      To reinstall this host, re-render the seed:
+        ansible-playbook playbooks/deploy-pxe-stack.yml
+        ansible-playbook playbooks/provision-ubuntu.yml -e ipxe_reset_state=true
+    dest: "{{ storage.http_root }}/ubuntu/{{ item }}/PURGED.txt"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ forge_installed_linux_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when: ubuntu_autoinstall_purge_seed | bool
+  tags: [provisioning, linux, security]

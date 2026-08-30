@@ -1,0 +1,73 @@
+---
+# =====================================================================
+# SSH hardening
+# =====================================================================
+# A drop-in under sshd_config.d rather than an edit to sshd_config: the
+# distribution file stays pristine, so an OS upgrade that rewrites it
+# cannot silently revert this policy.
+#
+# The autoinstall seed wrote the same drop-in as a late-command, so the
+# host is already hardened on its first boot. This task makes it
+# managed desired state.
+# =====================================================================
+
+- name: Install the SSH hardening drop-in
+  ansible.builtin.template:
+    src: sshd-forge.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-forge-ai.conf
+    owner: root
+    group: root
+    mode: "0600"
+    # Never install a config that sshd itself rejects: a failed sshd
+    # restart on a headless VM reachable only over SSH is unrecoverable
+    # without console access.
+    validate: "sshd -t -f %s"
+  become: true
+  notify: restart sshd
+  tags: [linux, security]
+
+- name: Install the login banner
+  ansible.builtin.copy:
+    content: "{{ baseline.ubuntu.banner_text }}\n"
+    dest: /etc/issue.net
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: restart sshd
+  tags: [linux, security, drift]
+
+- name: Ensure sshd is enabled and running
+  ansible.builtin.systemd_service:
+    name: ssh
+    enabled: true
+    state: started
+  become: true
+  tags: [linux, security]
+
+- name: Apply the sshd changes now
+  # Flushed here rather than at the end of the play so the verification
+  # below tests the new configuration, not the old one.
+  ansible.builtin.meta: flush_handlers
+  tags: [linux, security]
+
+- name: Read the effective sshd configuration
+  ansible.builtin.command: sshd -T
+  become: true
+  changed_when: false
+  register: forge_sshd_effective
+  tags: [linux, security, validation]
+
+- name: Assert the hardening actually took effect
+  ansible.builtin.assert:
+    that:
+      - "'permitrootlogin ' ~ security.ssh_permit_root_login in forge_sshd_effective.stdout"
+      - "'passwordauthentication ' ~ security.ssh_password_authentication in forge_sshd_effective.stdout"
+      - "'pubkeyauthentication yes' in forge_sshd_effective.stdout"
+    fail_msg: >-
+      sshd is running but its effective configuration does not match the desired
+      state. Another drop-in in /etc/ssh/sshd_config.d/ may be overriding
+      10-forge-ai.conf -- files are read in lexical order, so a later one wins.
+      Inspect with: sudo sshd -T | grep -E 'permitrootlogin|passwordauthentication'
+    success_msg: "sshd policy verified against the effective configuration"
+  tags: [linux, security, validation]

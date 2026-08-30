@@ -1,0 +1,30 @@
+#!/bin/sh
+# =====================================================================
+# FORGE-AI :: control-plane login banner
+# =====================================================================
+# Rendered by ansible/playbooks/bootstrap-control-plane.yml.
+# DO NOT EDIT ON THE HOST -- overwritten on the next bootstrap run.
+# Source of truth: ansible/templates/motd/50-forge-ai.j2
+# =====================================================================
+
+cat <<'FORGE_MOTD_EOF'
+
+  FORGE-AI control plane
+
+    Gitea       https://{{ control_plane.gitea_hostname }}:{{ control_plane.proxy_https_port }}
+    Semaphore   https://{{ control_plane.semaphore_hostname }}:{{ control_plane.proxy_https_port }}
+    Boot server http://{{ provisioning_network.gateway }}:{{ control_plane.boot_http_port }}
+    State API   http://{{ provisioning_network.gateway }}:{{ control_plane.boot_http_port }}/api/state
+
+  Both UIs use a self-signed certificate.
+{% if forge_proxy_bind_address_is_loopback | default(true) %}
+  Published on loopback only. From another machine on the LAN:
+    ssh -L {{ control_plane.proxy_https_port }}:127.0.0.1:{{ control_plane.proxy_https_port }} {{ ansible_user | default('<user>') }}@{{ ansible_default_ipv4.address | default('<this-host>') }}
+  and add to your hosts file:
+    127.0.0.1  {{ control_plane.gitea_hostname }} {{ control_plane.semaphore_hostname }}
+{% else %}
+  Published on the LAN. Add to your hosts file:
+    {{ ansible_default_ipv4.address | default('<this-host>') }}  {{ control_plane.gitea_hostname }} {{ control_plane.semaphore_hostname }}
+{% endif %}
+
+FORGE_MOTD_EOF

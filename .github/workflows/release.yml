@@ -1,0 +1,261 @@
+---
+# =====================================================================
+# FORGE-AI :: release
+# =====================================================================
+# Triggered by a semantic version tag. Produces a source-and-docs
+# archive with the licensed media, generated secrets and local state
+# explicitly excluded -- the archive is the thing most likely to be
+# copied somewhere less careful than the repository.
+# =====================================================================
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v1.2.0 (dry run only)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if ! printf '%s' "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a semantic version tag (expected vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "releasing $version (prerelease: $prerelease)"
+
+      - name: Confirm the CHANGELOG documents this version
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          number="${version#v}"
+
+          test -f CHANGELOG.md || {
+            echo "::error::CHANGELOG.md does not exist"
+            exit 1
+          }
+
+          # A release with no changelog entry is a release nobody can
+          # review. The heading must name this exact version.
+          if ! grep -qE "^##+ \[?${number}\]?" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::no entry for ${number}"
+            echo
+            echo "Add a section to CHANGELOG.md, for example:"
+            echo
+            echo "  ## [${number}] - $(date +%Y-%m-%d)"
+            echo
+            echo "  ### Added"
+            echo "  - ..."
+            exit 1
+          fi
+          echo "CHANGELOG.md documents ${number}"
+
+      - name: Confirm the tag is on the default branch
+        run: |
+          # A release cut from an unmerged branch has not been through
+          # the review gate.
+          if ! git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/main'; then
+            echo "::error::this commit is not on origin/main"
+            echo "Releases are cut from main, which is the branch that has been reviewed."
+            exit 1
+          fi
+          echo "the tag is on main"
+
+  validate:
+    name: Re-run validation
+    uses: ./.github/workflows/validate.yml
+
+  package:
+    name: Build the release archive
+    runs-on: ubuntu-24.04
+    needs: [verify, validate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          staging="forge-ai-${VERSION}"
+          mkdir -p "dist/${staging}"
+
+          # An allowlist, not an exclude list. An exclude list silently
+          # ships whatever it forgot; an allowlist silently omits it,
+          # which is the safer failure for an archive that will be
+          # copied somewhere less careful than this repository.
+          for path in \
+              ansible bootstrap compose config docs pxe scripts tests \
+              .devcontainer .github \
+              Makefile Taskfile.yml README.md CONTRIBUTING.md CHANGELOG.md \
+              LICENSE SECURITY.md THIRD_PARTY_NOTICES.md \
+              .gitignore .yamllint .markdownlint.json pytest.ini
+          do
+            [ -e "$path" ] && cp -a "$path" "dist/${staging}/"
+          done
+
+          # Belt and braces: remove anything that should never travel,
+          # even if an allowlisted directory happened to contain it.
+          find "dist/${staging}" \
+            \( -name '*.iso' -o -name '*.wim' -o -name '*.esd' \
+               -o -name '*.qcow2' -o -name '*.vhd' -o -name '*.vhdx' \
+               -o -name '*.pem' -o -name '*.key' -o -name '*.p12' \
+               -o -name 'vault.yml' -o -name '.env' -o -name 'poc.yml' \
+               -o -name '.vault-password' \) \
+            -delete
+
+          find "dist/${staging}" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          find "dist/${staging}" -name '.pytest_cache' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+          printf '%s\n' "${VERSION}" > "dist/${staging}/VERSION"
+
+          tar -czf "dist/forge-ai-${VERSION}.tar.gz" -C dist "${staging}"
+          (cd dist && zip -qr "forge-ai-${VERSION}.zip" "${staging}")
+
+          echo "archive contents: $(find "dist/${staging}" -type f | wc -l) files"
+
+      - name: Verify nothing forbidden made it into the archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          listing=$(tar -tzf "dist/forge-ai-${VERSION}.tar.gz")
+
+          forbidden=$(printf '%s\n' "$listing" \
+            | grep -Ei '\.(iso|wim|esd|qcow2|vhd|vhdx|pem|key|p12|pfx)$|/vault\.yml$|/\.env$|/poc\.yml$|\.vault-password$' \
+            || true)
+
+          if [ -n "$forbidden" ]; then
+            echo "::error::the archive contains files that must never be distributed:"
+            printf '%s\n' "$forbidden"
+            exit 1
+          fi
+
+          # And confirm what SHOULD be there actually is.
+          for required in "README.md" "LICENSE" "THIRD_PARTY_NOTICES.md" \
+                          "ansible/playbooks/site.yml" "config/poc.example.yml"; do
+            printf '%s\n' "$listing" | grep -q "/${required}$" || {
+              echo "::error::the archive is missing ${required}"
+              exit 1
+            }
+          done
+
+          echo "archive verified: no media, no secrets, and the documentation is present"
+
+      - name: Record the archive checksums
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          cd dist
+          sha256sum "forge-ai-${VERSION}.tar.gz" "forge-ai-${VERSION}.zip" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract the changelog entry for this version
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          number="${VERSION#v}"
+          # Everything between this version's heading and the next one.
+          awk -v version="$number" '
+            $0 ~ "^##+ \\[?" version "\\]?" { capture = 1; next }
+            capture && /^##+ \[?[0-9]+\./ { exit }
+            capture { print }
+          ' CHANGELOG.md > dist/RELEASE_NOTES.md
+
+          {
+            echo
+            echo "---"
+            echo
+            echo "### Verifying this release"
+            echo
+            echo '```'
+            echo "sha256sum -c SHA256SUMS"
+            echo '```'
+            echo
+            echo "### What is not in this archive"
+            echo
+            echo "No Windows Server media, no ISO, no WIM, no generated secret and no"
+            echo "operator configuration. Windows media is supplied by the operator under"
+            echo "Microsoft's licensing terms; see \`docs/WINDOWS-PROVISIONING.md\`."
+            echo
+            echo "### Third-party components"
+            echo
+            echo "See \`THIRD_PARTY_NOTICES.md\` for every bundled and referenced component,"
+            echo "its licence, and the attribution it requires."
+          } >> dist/RELEASE_NOTES.md
+
+          cat dist/RELEASE_NOTES.md
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-archive
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/RELEASE_NOTES.md
+          retention-days: 30
+
+  publish:
+    name: Publish the release
+    runs-on: ubuntu-24.04
+    needs: [verify, package]
+    # A manual dispatch is a dry run: it builds and verifies the archive
+    # but does not create a release.
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-archive
+          path: dist
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          arguments=(--title "FORGE-AI ${VERSION}" --notes-file dist/RELEASE_NOTES.md)
+          [ "$PRERELEASE" = "true" ] && arguments+=(--prerelease)
+
+          gh release create "${VERSION}" \
+            "${arguments[@]}" \
+            dist/forge-ai-"${VERSION}".tar.gz \
+            dist/forge-ai-"${VERSION}".zip \
+            dist/SHA256SUMS

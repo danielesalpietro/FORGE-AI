@@ -1,0 +1,42 @@
+---
+# =====================================================================
+# Create (or recreate) the isolated provisioning network.
+# =====================================================================
+#   ansible-playbook playbooks/create-provisioning-network.yml
+#   ansible-playbook playbooks/create-provisioning-network.yml -e libvirt_network_force_recreate=true
+#
+# Recreation disconnects every guest attached to the network, so it is
+# never the default.
+# =====================================================================
+- name: Create the provisioning network
+  hosts: control_plane
+  gather_facts: true
+  tags: [network, provisioning]
+
+  pre_tasks:
+    - name: Probe for a competing DHCP server
+      ansible.builtin.include_role:
+        name: prerequisite_validation
+        tasks_from: dhcp-conflict.yml
+      vars:
+        forge_prereq_findings: []
+      when: safety.abort_on_dhcp_conflict | default(true)
+      tags: [network, validation]
+
+    - name: Stop on a DHCP conflict
+      ansible.builtin.fail:
+        msg: |
+          A competing DHCP server was found on {{ provisioning_network.bridge }}.
+          {% for finding in forge_prereq_findings | selectattr('severity', 'eq', 'error') %}
+          {{ finding.detail | trim }}
+          {% endfor %}
+      when:
+        - forge_prereq_findings | default([]) | selectattr('severity', 'eq', 'error') | list | length > 0
+        - not forge_force | bool
+      tags: [network, validation]
+
+  roles:
+    - role: libvirt_host
+      tags: [network, provisioning]
+    - role: libvirt_network
+      tags: [network, provisioning]

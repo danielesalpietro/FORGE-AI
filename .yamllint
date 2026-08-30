@@ -1,0 +1,51 @@
+---
+# =====================================================================
+# FORGE-AI :: yamllint configuration
+# =====================================================================
+extends: default
+
+ignore: |
+  ansible/collections/
+  .venv/
+  node_modules/
+  compose/.env
+  # An operator-created Ansible Vault file is ciphertext, not YAML: it
+  # has no `---` and no structure to lint. It is git-ignored, so CI never
+  # sees one, but `make lint-yaml` on a real host would fail without this.
+  ansible/inventories/**/vault.yml
+
+rules:
+  # Ansible task names and long Jinja expressions routinely exceed 80
+  # columns; wrapping them hurts readability more than the length does.
+  line-length:
+    max: 160
+    level: warning
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  # `key: {a: 1}` flow mappings are used in docker-compose.yml for
+  # short resource limits, where the block form is pure noise.
+  braces:
+    max-spaces-inside: 1
+
+  brackets:
+    max-spaces-inside: 1
+
+  # Ansible conventionally uses "yes"/"no" in some places and true/false
+  # in others; requiring one spelling adds churn without value.
+  truthy:
+    allowed-values: ["true", "false", "yes", "no"]
+    check-keys: false
+
+  comments:
+    min-spaces-from-content: 1
+
+  comments-indentation: disable
+
+  # Documents in this repository start with --- consistently.
+  document-start:
+    present: true
+
+  indentation:
+    spaces: 2
+    indent-sequences: consistent

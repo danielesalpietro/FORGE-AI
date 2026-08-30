@@ -1,0 +1,66 @@
+---
+# =====================================================================
+# FORGE-AI :: Ansible Vault template -- PLACEHOLDERS ONLY
+# =====================================================================
+# Create the real, encrypted file with:
+#
+#   ./bootstrap/create-secrets.sh
+#
+# which generates strong random values and writes:
+#
+#   ansible/inventories/poc/group_vars/all/vault.yml   (encrypted, 0600)
+#   .vault-password                                    (0600, git ignored)
+#
+# Or by hand:
+#
+#   cp vault.example.yml vault.yml
+#   $EDITOR vault.yml
+#   ansible-vault encrypt vault.yml
+#
+# vault.yml is git-ignored and .github/workflows/security.yml fails the
+# build if an unencrypted one is ever committed.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Ubuntu bootstrap account
+# ---------------------------------------------------------------------
+# The cleartext password is only ever used to compute the hash below.
+# It is NOT written into the autoinstall seed; only the hash is.
+# Generate the hash with:
+#   mkpasswd --method=yescrypt          (whois package)
+#   python3 -c 'import crypt,getpass;print(crypt.crypt(getpass.getpass(),crypt.mksalt(crypt.METHOD_SHA512)))'
+vault_ubuntu_bootstrap_password: "REPLACE_ME"
+vault_ubuntu_bootstrap_password_hash: "$6$REPLACE_ME"
+
+# ---------------------------------------------------------------------
+# Windows local administrator
+# ---------------------------------------------------------------------
+# Must satisfy the Windows Server complexity policy: >= 14 characters
+# with three of {upper, lower, digit, symbol}.
+# Rendered into Autounattend.xml as Base64(UTF-16LE(pw + field-name)),
+# which is obfuscation and not encryption -- see docs/SECURITY.md.
+vault_windows_admin_password: "REPLACE_ME"
+
+# ---------------------------------------------------------------------
+# Provisioning state service
+# ---------------------------------------------------------------------
+# Shared token required on the mutating state endpoints. Must match
+# FORGE_STATE_TOKEN in compose/.env. Leave empty to run the state
+# service unauthenticated on a genuinely isolated network.
+vault_forge_state_token: "REPLACE_ME"
+
+# ---------------------------------------------------------------------
+# Gitea / Semaphore API access, used by the semaphore_config and
+# gitea_config roles.
+# ---------------------------------------------------------------------
+vault_gitea_admin_password: "REPLACE_ME"
+vault_gitea_api_token: "REPLACE_ME"
+vault_semaphore_admin_password: "REPLACE_ME"
+vault_semaphore_api_token: "REPLACE_ME"
+vault_gitea_webhook_secret: "REPLACE_ME"
+
+# ---------------------------------------------------------------------
+# SSH key pair used to reach the Linux targets. The PRIVATE key is
+# referenced by path, never inlined here.
+# ---------------------------------------------------------------------
+vault_ssh_private_key_path: "~/.ssh/forge-ai-poc"

@@ -1,0 +1,92 @@
+---
+# =====================================================================
+# TLS / SChannel baseline
+# =====================================================================
+# Disables SSL 3.0, TLS 1.0 and TLS 1.1 on both the client and server
+# sides, and forces .NET to use the system default rather than its own
+# hard-coded protocol list.
+#
+# CAUTION, and it matters here: WinRM rides on SChannel. Disabling a
+# protocol the Ansible controller relies on cuts the connection this
+# very play is using. TLS 1.2 is left enabled explicitly and is what
+# pywinrm negotiates, so the change is safe -- but the ordering is not
+# accidental: 1.2 is enabled BEFORE the older versions are removed.
+# =====================================================================
+
+- name: Enable TLS 1.2 before disabling anything older
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\{{ item }}'
+    name: "{{ setting.name }}"
+    data: "{{ setting.data }}"
+    type: dword
+  loop: [Server, Client]
+  loop_control:
+    label: "TLS 1.2 {{ item }}"
+  vars:
+    setting: { name: Enabled, data: 1 }
+  tags: [windows, security]
+
+- name: Ensure TLS 1.2 is not disabled by default
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\{{ item }}'
+    name: DisabledByDefault
+    data: 0
+    type: dword
+  loop: [Server, Client]
+  loop_control:
+    label: "TLS 1.2 {{ item }}"
+  tags: [windows, security]
+
+- name: Disable the obsolete TLS and SSL versions
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\{{ item.0 }}\{{ item.1 }}'
+    name: "{{ item.2.name }}"
+    data: "{{ item.2.data }}"
+    type: dword
+  vars:
+    forge_obsolete_protocols: ['SSL 2.0', 'SSL 3.0', 'TLS 1.0', 'TLS 1.1']
+    forge_schannel_settings:
+      - {name: Enabled, data: 0}
+      - {name: DisabledByDefault, data: 1}
+    forge_schannel_matrix: >-
+      {{ forge_obsolete_protocols
+         | product(['Server', 'Client'])
+         | product(forge_schannel_settings)
+         | map('flatten') | list }}
+  loop: "{{ forge_schannel_matrix }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1 }} {{ item.2.name }}"
+  notify: reboot windows
+  tags: [windows, security]
+
+- name: Make .NET honour the system TLS defaults
+  # Without these, a .NET application negotiates its own protocol list
+  # and can still use TLS 1.0 after SChannel has been hardened.
+  ansible.windows.win_regedit:
+    path: "{{ item }}"
+    name: SchUseStrongCrypto
+    data: 1
+    type: dword
+  loop:
+    - 'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319'
+    - 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319'
+  tags: [windows, security]
+
+- name: Make .NET use the OS default protocol version
+  ansible.windows.win_regedit:
+    path: "{{ item }}"
+    name: SystemDefaultTlsVersions
+    data: 1
+    type: dword
+  loop:
+    - 'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319'
+    - 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319'
+  tags: [windows, security]
+
+- name: Note that the TLS changes need a reboot
+  ansible.builtin.debug:
+    msg: >-
+      SChannel protocol changes take effect on reboot. Until then this host still
+      accepts the older protocols. The reboot handler will run at the end of this
+      play unless windows_baseline_allow_reboot is false.
+  tags: [windows, security]

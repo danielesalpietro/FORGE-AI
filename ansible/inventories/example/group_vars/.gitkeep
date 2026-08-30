@@ -1,0 +1,2 @@
+Copy ansible/inventories/poc/group_vars/ here and edit only what differs
+for this environment. See ../README.md.

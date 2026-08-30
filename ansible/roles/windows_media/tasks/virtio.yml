@@ -1,0 +1,123 @@
+---
+# =====================================================================
+# VirtIO drivers for Windows Setup and for WinPE
+# =====================================================================
+# Windows has no in-box VirtIO driver. Without viostor, Setup shows "We
+# couldn't find any drives"; without NetKVM, the specialize-phase
+# callbacks and Ansible have no network.
+#
+# The drivers are BSD/GPL licensed and published by the Fedora virt
+# project. They are downloaded, not vendored, so this repository ships
+# no third-party binary. See THIRD_PARTY_NOTICES.md.
+# =====================================================================
+
+- name: Check whether the VirtIO ISO is already present
+  ansible.builtin.stat:
+    path: "{{ media.windows.virtio.iso_path }}"
+    checksum_algorithm: sha256
+    get_checksum: "{{ media.windows.virtio.iso_sha256 | default('') | length == 64 }}"
+  become: true
+  register: forge_virtio_iso
+  tags: [media, windows]
+
+- name: Download the VirtIO driver ISO
+  ansible.builtin.get_url:
+    url: "{{ media.windows.virtio.iso_url }}"
+    dest: "{{ media.windows.virtio.iso_path }}"
+    checksum: "{{ ('sha256:' ~ media.windows.virtio.iso_sha256) if media.windows.virtio.iso_sha256 | default('') | length == 64 else omit }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: "{{ windows_media_download_timeout }}"
+  become: true
+  when: >-
+    not forge_virtio_iso.stat.exists
+    or (media.windows.virtio.iso_sha256 | default('') | length == 64
+        and forge_virtio_iso.stat.checksum | default('') != media.windows.virtio.iso_sha256)
+  register: forge_virtio_download
+  retries: 3
+  delay: 10
+  until: forge_virtio_download is succeeded
+  tags: [media, windows]
+
+- name: Record the VirtIO ISO checksum
+  ansible.builtin.stat:
+    path: "{{ media.windows.virtio.iso_path }}"
+    checksum_algorithm: sha256
+  become: true
+  register: forge_virtio_verified
+  tags: [media, windows, validation]
+
+- name: Report an unpinned VirtIO checksum
+  ansible.builtin.debug:
+    msg: |
+      VirtIO ISO SHA-256: {{ forge_virtio_verified.stat.checksum }}
+
+      Not pinned in config/poc.yml. Pin it so a substituted driver ISO is
+      detected -- these drivers run in kernel mode on the Windows target:
+
+        media:
+          windows:
+            virtio:
+              iso_sha256: "{{ forge_virtio_verified.stat.checksum }}"
+  when: media.windows.virtio.iso_sha256 | default('') | length != 64
+  tags: [media, windows, validation]
+
+- name: Extract the VirtIO drivers for the SMB export
+  ansible.builtin.command:
+    argv:
+      - 7z
+      - x
+      - -y
+      - "-o{{ storage.http_root }}/windows/virtio"
+      - "{{ media.windows.virtio.iso_path }}"
+  become: true
+  args:
+    creates: "{{ storage.http_root }}/windows/virtio/viostor"
+  tags: [media, windows]
+
+- name: Confirm every configured driver path exists in the extracted tree
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/virtio/{{ item }}"
+  become: true
+  loop: "{{ media.windows.virtio.driver_paths }}"
+  register: forge_virtio_paths
+  tags: [media, windows, validation]
+
+- name: Fail on a driver path that does not exist
+  ansible.builtin.fail:
+    msg: |
+      These VirtIO driver paths from config/poc.yml are not in the ISO:
+
+      {% for result in forge_virtio_paths.results | rejectattr('stat.exists') %}
+        {{ result.item }}
+      {% endfor %}
+
+      The per-OS sub-directory names change between virtio-win releases
+      ("2k25", "2k22", "w11" ...). List what this ISO actually contains:
+
+        ls {{ storage.http_root }}/windows/virtio/viostor/
+
+      then correct media.windows.virtio.driver_paths in config/poc.yml.
+
+      Getting this wrong means Windows Setup finds no disk (viostor) or the
+      installed host has no network (NetKVM) -- both fail late and confusingly.
+  when: forge_virtio_paths.results | rejectattr('stat.exists') | list | length > 0
+  tags: [media, windows, validation]
+
+- name: Confirm the guest agent installer is present
+  ansible.builtin.stat:
+    path: "{{ storage.http_root }}/windows/virtio/{{ media.windows.virtio.guest_agent_path }}"
+  become: true
+  register: forge_virtio_agent
+  tags: [media, windows, validation]
+
+- name: Note a missing guest agent installer
+  ansible.builtin.debug:
+    msg: >-
+      {{ media.windows.virtio.guest_agent_path }} is not in this VirtIO ISO.
+      qemu-guest-agent will be skipped, which means `virsh domifaddr` cannot read
+      the guest's IP address. Not fatal: the smoke test falls back to the DHCP
+      reservation.
+  when: not forge_virtio_agent.stat.exists
+  tags: [media, windows, validation]

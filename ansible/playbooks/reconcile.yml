@@ -1,0 +1,99 @@
+---
+# =====================================================================
+# Reconcile: reapply the desired state, then prove it took.
+# =====================================================================
+#   make reconcile
+#
+# Deliberately a separate playbook from detect-drift.yml. Detection and
+# correction are different decisions, and a report that silently fixed
+# what it found would make the drift history meaningless.
+#
+# Before running this, read the drift report. If a deviation is
+# legitimate, change the desired state in Git and open a pull request --
+# do not reconcile it away.
+# =====================================================================
+- name: Confirm the operator has seen the drift report
+  hosts: control_plane
+  gather_facts: true
+  tags: [drift, reconcile]
+
+  tasks:
+    - name: Look for a recent drift report
+      ansible.builtin.stat:
+        path: "{{ storage.report_dir }}/drift/latest.md"
+      become: true
+      register: forge_latest_drift
+      tags: [drift, reconcile]
+
+    - name: Point at the report before changing anything
+      ansible.builtin.debug:
+        msg: |
+          {% if forge_latest_drift.stat.exists %}
+          Most recent drift report: {{ storage.report_dir }}/drift/latest.md
+          (written {{ '%Y-%m-%d %H:%M:%S' | strftime(forge_latest_drift.stat.mtime) }})
+          {% else %}
+          No drift report found under {{ storage.report_dir }}/drift/.
+
+          Reconciling without detecting first is legitimate -- it simply reapplies
+          the desired state -- but it means there is no record of what was wrong.
+          Consider running `make drift` first.
+          {% endif %}
+
+          Reconciliation reapplies the desired state from commit {{ forge_git_commit }}.
+          Anything changed by hand on these hosts will be reverted.
+      tags: [drift, reconcile]
+
+- name: Reapply the desired state
+  hosts: forge_targets
+  gather_facts: true
+  tags: [drift, reconcile]
+
+  tasks:
+    - name: Reapply the Ubuntu baseline
+      ansible.builtin.include_role:
+        name: ubuntu_baseline
+      when: forge_host.os_family == 'linux'
+      tags: [reconcile]
+
+    - name: Reapply the Windows baseline
+      ansible.builtin.include_role:
+        name: windows_baseline
+      when: forge_host.os_family == 'windows'
+      tags: [reconcile]
+
+- name: Verify the reconciliation
+  # A reconcile that claims success without re-checking is an assertion,
+  # not evidence. This re-runs detection and fails if drift survives.
+  hosts: forge_targets
+  gather_facts: false
+  tags: [drift, reconcile, validation]
+
+  roles:
+    - role: drift_detection
+      vars:
+        drift_fail_on_drift: false
+      tags: [reconcile, validation]
+
+- name: Report the post-reconciliation state
+  hosts: control_plane
+  gather_facts: true
+  tags: [drift, reconcile, reporting]
+
+  tasks:
+    - name: Assemble and write the verification report
+      ansible.builtin.include_role:
+        name: drift_detection
+        tasks_from: report.yml
+      tags: [reconcile, reporting]
+
+    - name: Fail when drift survived reconciliation
+      ansible.builtin.fail:
+        msg: |
+          Drift is still present after reconciliation on:
+            {{ drift.hosts | selectattr('drifted') | map(attribute='name') | join(', ') }}
+
+          That means something on those hosts is fighting the desired state -- a
+          competing configuration tool, a scheduled job, or a control this project
+          sets but does not own. See {{ storage.report_dir }}/drift/latest.md.
+      when: drift.drifted | default(false)
+      tags: [reconcile, validation]

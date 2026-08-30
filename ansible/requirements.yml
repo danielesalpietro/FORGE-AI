@@ -1,0 +1,45 @@
+---
+# =====================================================================
+# FORGE-AI :: Ansible collection requirements
+# =====================================================================
+#   ansible-galaxy collection install -r ansible/requirements.yml
+# or
+#   make bootstrap        (installs into ansible/collections/)
+#
+# Versions are pinned with `>=,<` so a patch release is picked up but a
+# breaking major is not. The exact versions this PoC was validated
+# against are recorded in docs/COMPATIBILITY.md.
+# =====================================================================
+
+collections:
+  # Core building blocks: templates, files, services, packages.
+  - name: ansible.posix
+    version: ">=1.5.4,<3.0.0"
+
+  # Windows: win_ping, win_feature, win_shell, win_firewall_rule,
+  # win_updates, win_reboot, win_service ...
+  - name: ansible.windows
+    version: ">=2.5.0,<4.0.0"
+
+  # Windows extras: win_firewall, win_security_policy, win_audit_policy,
+  # win_dns_client, win_disk_facts.
+  - name: community.windows
+    version: ">=2.2.0,<4.0.0"
+
+  # PSRP as an alternative to WinRM for the Windows connection.
+  - name: community.general
+    version: ">=9.0.0,<12.0.0"
+
+  # virt, virt_net, virt_pool: libvirt domain and network lifecycle.
+  - name: community.libvirt
+    version: ">=1.3.0,<2.0.0"
+
+  # Container and compose interaction for the control plane.
+  - name: community.docker
+    version: ">=3.10.0,<5.0.0"
+
+  # Cryptography helpers used to generate the PoC TLS material.
+  - name: community.crypto
+    version: ">=2.20.0,<4.0.0"
+
+roles: []

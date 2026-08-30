@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# =====================================================================
+# FORGE-AI :: host health check for {{ inventory_hostname }}
+# Rendered from roles/ubuntu_baseline/templates/forge-health.sh.j2
+# =====================================================================
+# A single command an operator, a smoke test or a monitoring system can
+# run to answer "is this host in the state FORGE-AI intended?".
+#
+#   forge-health            human-readable
+#   forge-health --json     machine-readable, for the deployment report
+#
+# Exit status: 0 all checks pass, 1 at least one failed.
+# =====================================================================
+set -Eeuo pipefail
+
+readonly EXPECTED_HOSTNAME="{{ inventory_hostname }}"
+readonly EXPECTED_USER="{{ users.automation_user }}"
+readonly STATE_FILE="/etc/forge-ai/state.json"
+readonly BANNER_FILE="/etc/issue.net"
+
+JSON_OUTPUT=false
+[[ "${1:-}" == "--json" ]] && JSON_OUTPUT=true
+
+declare -a NAMES=() DETAILS=() RESULTS=()
+FAILED=0
+
+record() {
+    local name="$1" ok="$2" detail="$3"
+    NAMES+=("$name"); RESULTS+=("$ok"); DETAILS+=("$detail")
+    [[ "$ok" == "true" ]] || FAILED=$((FAILED + 1))
+}
+
+check_cmd() {
+    local name="$1" expected="$2"; shift 2
+    local observed
+    if observed="$("$@" 2>&1)"; then
+        if [[ "$observed" == *"$expected"* ]]; then
+            record "$name" true "$observed"
+        else
+            record "$name" false "expected '$expected', observed '$observed'"
+        fi
+    else
+        record "$name" false "command failed: $observed"
+    fi
+}
+
+# ---- identity -------------------------------------------------------
+if [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]; then
+    record hostname true "$EXPECTED_HOSTNAME"
+else
+    record hostname false "expected '$EXPECTED_HOSTNAME', observed '$(hostname)'"
+fi
+
+if id "$EXPECTED_USER" >/dev/null 2>&1; then
+    record automation-user true "$EXPECTED_USER exists"
+else
+    record automation-user false "$EXPECTED_USER is missing"
+fi
+
+# ---- services -------------------------------------------------------
+for service in ssh qemu-guest-agent{% if ubuntu_baseline_manage_ntp | bool %} chrony{% endif %}{% if ubuntu_baseline_manage_audit | bool %} auditd{% endif %}; do
+    if systemctl is-active --quiet "$service"; then
+        record "service:$service" true active
+    else
+        record "service:$service" false "$(systemctl is-active "$service" 2>&1 || true)"
+    fi
+done
+
+# ---- policy ---------------------------------------------------------
+check_cmd ssh-root-login "permitrootlogin {{ security.ssh_permit_root_login }}" \
+    bash -c "sshd -T 2>/dev/null | grep '^permitrootlogin '"
+check_cmd ssh-password-auth "passwordauthentication {{ security.ssh_password_authentication }}" \
+    bash -c "sshd -T 2>/dev/null | grep '^passwordauthentication '"
+
+{% if ubuntu_baseline_manage_firewall | bool %}
+check_cmd firewall "Status: active" bash -c "ufw status 2>/dev/null | head -1"
+{% endif %}
+
+# ---- desired state marker -------------------------------------------
+if [[ -r "$STATE_FILE" ]]; then
+    record desired-state true "$(jq -r '"commit " + .git_commit + " applied " + .applied_at' "$STATE_FILE" 2>/dev/null || echo present)"
+else
+    record desired-state false "$STATE_FILE is missing: this host was not configured by FORGE-AI"
+fi
+
+if [[ -r "$BANNER_FILE" ]] && grep -qF "{{ baseline.ubuntu.banner_text[:40] }}" "$BANNER_FILE"; then
+    record login-banner true "matches desired state"
+else
+    record login-banner false "$BANNER_FILE does not match the desired banner"
+fi
+
+# ---- output ---------------------------------------------------------
+STATUS=$([[ $FAILED -eq 0 ]] && echo ok || echo degraded)
+
+if [[ "$JSON_OUTPUT" == true ]]; then
+    printf '{"host":"%s","status":"%s","failed":%d,"checked_at":"%s","checks":[' \
+        "$EXPECTED_HOSTNAME" "$STATUS" "$FAILED" "$(date -Is)"
+    for i in "${!NAMES[@]}"; do
+        [[ $i -gt 0 ]] && printf ','
+        printf '{"name":"%s","ok":%s,"detail":"%s"}' \
+            "${NAMES[$i]}" "${RESULTS[$i]}" "$(printf '%s' "${DETAILS[$i]}" | tr -d '"' | tr '\n' ' ')"
+    done
+    printf ']}\n'
+else
+    echo "FORGE-AI health: $EXPECTED_HOSTNAME -> $STATUS ($FAILED failing)"
+    for i in "${!NAMES[@]}"; do
+        marker=$([[ "${RESULTS[$i]}" == "true" ]] && echo "  ok  " || echo " FAIL ")
+        printf '[%s] %-24s %s\n' "$marker" "${NAMES[$i]}" "${DETAILS[$i]}"
+    done
+fi
+
+[[ $FAILED -eq 0 ]]

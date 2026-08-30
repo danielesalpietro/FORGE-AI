@@ -1,0 +1,8 @@
+---
+# Users added to the libvirt and kvm groups so virsh works without sudo.
+libvirt_host_users: ["{{ ansible_env.SUDO_USER | default(ansible_user_id) }}"]
+libvirt_host_install_packages: true
+libvirt_host_manage_storage_pool: true
+# Set false on a host where /etc/libvirt is managed by configuration
+# management outside this project.
+libvirt_host_manage_qemu_conf: true

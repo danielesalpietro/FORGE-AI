@@ -1,0 +1,13 @@
+---
+# Refuse to continue when the operator-supplied ISO is absent, rather
+# than silently skipping the Windows target. provision-windows.yml sets
+# this true; site.yml leaves it false so an Ubuntu-only run works.
+windows_media_required: false
+# Re-extract even if the media directory already looks populated.
+windows_media_force_extract: false
+# Download and verify the VirtIO driver ISO.
+windows_media_fetch_virtio: true
+windows_media_download_timeout: 1800
+# Where the extracted ISO contents are exported over SMB.
+windows_media_share_name: winmedia
+virtio_media_share_name: virtio

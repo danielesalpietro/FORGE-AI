@@ -1,0 +1,94 @@
+---
+# =====================================================================
+# FORGE-AI :: OPERATOR CONFIGURATION  (copy to config/poc.yml)
+# =====================================================================
+#   cp config/poc.example.yml config/poc.yml
+#
+# config/poc.yml is git-ignored. Everything here is deep-merged on top
+# of config/defaults.yml. Only override what you actually need.
+#
+# Validate before every deployment:
+#   make validate           (schema + semantic checks + template render)
+# =====================================================================
+
+deployment:
+  name: poc
+  domain: poc.local
+  timezone: Europe/Rome
+  locale: en_US.UTF-8
+  keyboard_layout: us
+
+provisioning_network:
+  name: gitops-provisioning
+  bridge: virbr-forge
+  cidr: 192.168.250.0/24
+  gateway: 192.168.250.1
+  netmask: 255.255.255.0
+  dhcp_start: 192.168.250.100
+  dhcp_end: 192.168.250.199
+  forward_mode: nat
+  dns_servers:
+    - 1.1.1.1
+    - 9.9.9.9
+  ntp_servers:
+    - ntp.ubuntu.com
+
+media:
+  ubuntu:
+    iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
+    iso_path: /srv/forge-ai/iso/ubuntu-24.04.3-live-server-amd64.iso
+  windows:
+    # ---------------------------------------------------------------
+    # OPERATOR-SUPPLIED MEDIA -- REQUIRED FOR THE WINDOWS TARGET
+    # Download Windows Server 2025 Evaluation from the Microsoft
+    # Evaluation Center and place the ISO on this host. Nothing from
+    # Microsoft is stored in this repository.
+    # Leave empty to run the Ubuntu-only subset of the PoC.
+    # ---------------------------------------------------------------
+    iso_path: ""
+    # Run `make windows-images` to list the editions inside install.wim
+    # and copy the exact name here. Do NOT assume index 1.
+    image_name: "Windows Server 2025 SERVERSTANDARD"
+    image_index: 0
+
+hosts:
+  - name: poc-ubuntu-01
+    os_family: linux
+    profile: ubuntu-server
+    ip_address: 192.168.250.21
+    mac_address: "52:54:00:25:00:21"
+    vcpu: 2
+    # 4096 is not enough here: casper's url= autoinstall path stages the
+    # whole ISO in a RAM-backed tmpfs before it can partition anything,
+    # and on real hardware a 4GB guest hangs indefinitely partway through
+    # the fetch (~1.9GB in, no error, near-zero CPU, screen frozen) --
+    # confirmed via `virsh domstats --cpu-total` showing flat cpu.time
+    # and a partial nginx access-log entry for the ISO GET. 8192 gives
+    # enough headroom for the ~3.3GB ISO plus the live environment.
+    memory_mb: 8192
+    disk_gb: 40
+    firmware: uefi
+
+  - name: poc-windows-01
+    os_family: windows
+    profile: windows-server
+    ip_address: 192.168.250.22
+    mac_address: "52:54:00:25:00:22"
+    vcpu: 4
+    memory_mb: 8192
+    disk_gb: 80
+    firmware: uefi
+
+security:
+  # Populated automatically by bootstrap/create-secrets.sh. Public keys
+  # only -- never a private key.
+  ssh_authorized_keys: []
+  management_cidrs:
+    - 192.168.250.0/24
+  windows_rdp_enabled: false
+
+gitops:
+  github_repository: "danielesalpietro/FORGE-AI"
+  gitea_org: forge-ai
+  gitea_repo: gitops-infrastructure
+  sync_strategy: mirror

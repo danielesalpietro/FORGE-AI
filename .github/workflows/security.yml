@@ -1,0 +1,431 @@
+---
+# =====================================================================
+# FORGE-AI :: security
+# =====================================================================
+# The controls that must hold on every change, independently of
+# .gitignore. Ignoring a file is a convenience; this is the enforcement.
+# =====================================================================
+name: security
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    # Weekly, so a newly disclosed vulnerability in a pinned image or
+    # dependency is found without waiting for someone to push.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  secrets:
+    name: Secret scanning
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Gitleaks needs history to scan the commits in a pull
+          # request, not just the tip.
+          fetch-depth: 0
+
+      - name: Scan the history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the project's own hygiene tests
+        run: |
+          pip install --disable-pip-version-check \
+            "pytest>=8.2,<9" "jsonschema>=4.21,<5" "PyYAML>=6.0,<7" "Jinja2>=3.1.4,<4"
+          python3 -m pytest tests/unit/test_secret_hygiene.py -v
+
+  forbidden-files:
+    name: Forbidden file types
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject licensed or oversized media
+        run: |
+          # No Microsoft media, no disk images, no private keys. These
+          # would be a licensing problem as well as a repository-size one.
+          offenders=$(git ls-files | grep -Ei '\.(iso|wim|esd|vhd|vhdx|qcow2|img|raw|sdi)$' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::installation media or disk images are committed:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "no media or disk images are tracked"
+
+      - name: Reject private keys and certificates
+        run: |
+          offenders=$(git ls-files | grep -Ei '\.(pem|key|p12|pfx|jks|keystore)$|(^|/)(id_rsa|id_ed25519|id_ecdsa)$' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::private key material is committed:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "no private key material is tracked"
+
+      - name: Reject an unencrypted or committed vault
+        run: |
+          offenders=$(git ls-files | grep -E '(^|/)vault\.yml$|(^|/)\.vault-password$' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::an Ansible Vault file or its password is committed:"
+            echo "$offenders"
+            exit 1
+          fi
+          # A vault payload anywhere at all means something was committed
+          # that should not have been.
+          #
+          # The pattern is written with a character class so that THIS
+          # file does not contain the literal marker. A scanner that
+          # trips on itself gets an exclusion added, and the exclusion is
+          # what quietly weakens it later.
+          if git grep -lE '[$]ANSIBLE_VAUL[T];' 2>/dev/null; then
+            echo "::error::an Ansible Vault payload is present in a tracked file"
+            exit 1
+          fi
+          echo "no vault material is tracked"
+
+      - name: Reject the operator's own files
+        run: |
+          for path in compose/.env config/poc.yml; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              echo "::error file=$path::this file is operator-owned and must not be committed"
+              exit 1
+            fi
+          done
+          echo "operator-owned files are not tracked"
+
+      - name: Confirm the examples ARE tracked
+        run: |
+          # The inverse failure: over-broad .gitignore rules that also
+          # exclude the templates and examples operators need.
+          for path in compose/.env.example config/poc.example.yml \
+                      ansible/inventories/poc/group_vars/all/vault.example.yml \
+                      ansible/templates/windows/Autounattend.xml.j2 \
+                      ansible/templates/ubuntu/user-data.j2; do
+            git ls-files --error-unmatch "$path" >/dev/null 2>&1 || {
+              echo "::error file=$path::this file must be tracked but is not"
+              exit 1
+            }
+          done
+          echo "every example and template is tracked"
+
+      - name: Reject a Windows product key
+        run: |
+          # Five groups of five alphanumerics. Also catches a key pasted
+          # into documentation.
+          if git grep -nE '\b[A-Z0-9]{5}(-[A-Z0-9]{5}){4}\b' \
+               -- ':!*.md' ':!tests/*' 2>/dev/null; then
+            echo "::error::what looks like a Windows product key is committed"
+            exit 1
+          fi
+          echo "no product key found"
+
+  cleartext-passwords:
+    name: Cleartext credentials
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject placeholder values left in a template or example
+        run: |
+          # The examples must contain CHANGEME. Anything else must not.
+          offenders=$(git grep -ln 'CHANGEME' \
+            -- ':!compose/.env.example' ':!*.md' ':!tests/*' ':!.github/*' || true)
+          if [ -n "$offenders" ]; then
+            echo "::warning::CHANGEME appears outside the example files:"
+            echo "$offenders"
+          fi
+
+      - name: Confirm the Windows answer file never emits a plaintext password
+        run: |
+          # PlainText=true would put the real administrator password into
+          # a file served over HTTP on the provisioning network.
+          if grep -n '<PlainText>true</PlainText>' \
+               ansible/templates/windows/Autounattend.xml.j2; then
+            echo "::error::the answer file would emit a plaintext password"
+            exit 1
+          fi
+          grep -q '<PlainText>false</PlainText>' \
+            ansible/templates/windows/Autounattend.xml.j2 \
+            || { echo "::error::the answer file does not set PlainText=false"; exit 1; }
+          echo "the Windows answer file uses the encoded form"
+
+      - name: Confirm the Ubuntu seed uses a hash
+        run: |
+          # A cleartext password here would be served over HTTP and would
+          # also land in /var/log/installer on the target.
+          grep -q 'password: "{{ ubuntu_bootstrap_password_hash }}"' \
+            ansible/templates/ubuntu/user-data.j2 \
+            || { echo "::error::the autoinstall seed does not use a password hash"; exit 1; }
+          echo "the autoinstall seed uses a hash"
+
+      - name: Confirm TLS validation is never disabled without a control
+        run: |
+          offenders=$(grep -rln -- '--insecure\|verify=False\|CURLOPT_SSL_VERIFYPEER.*0' \
+            scripts/ bootstrap/ ansible/ compose/ 2>/dev/null || true)
+          failed=0
+          for file in $offenders; do
+            grep -qE 'CURL_TLS_OPTIONS|VALIDATE_TLS|validate-tls|winrm_cert_validation' "$file" || {
+              echo "::error file=$file::TLS validation is disabled with no named control"
+              failed=1
+            }
+          done
+          exit $failed
+
+  filesystem:
+    name: Trivy filesystem and configuration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the filesystem for vulnerabilities and secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-filesystem.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+
+      # Uploading SARIF needs Code scanning enabled on the repository,
+      # which is a repository SETTING and not something a workflow can
+      # turn on. It is not available on a private repository without
+      # GitHub Advanced Security. The scan itself still runs and the
+      # critical-finding gate below still blocks -- only the pretty
+      # rendering in the Security tab is optional, so this step must not
+      # fail the build.
+      - name: Upload the filesystem findings
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-filesystem.sarif
+          category: trivy-filesystem
+
+      - name: Scan the infrastructure-as-code configuration
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          severity: CRITICAL,HIGH
+          # Named explicitly rather than relying on Trivy discovering
+          # the file itself. Read .trivyignore: every suppression in it
+          # carries the reason it exists.
+          trivyignores: .trivyignore
+
+      - name: Upload the configuration findings
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+      # This is the gate that actually blocks. It needs no repository
+      # setting, so it works on any fork or private clone.
+      - name: Fail on a critical finding
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      # The configuration scan writes SARIF and prints nothing, so a
+      # misconfiguration reaches the Security tab -- and turns the "Trivy"
+      # check red -- without ever being named in the log. Anyone reading
+      # the run then sees a red check and no way to tell what it found.
+      #
+      # This reads the SARIF back and prints one line per finding. It is
+      # the LAST step on purpose: the finding is then the last thing in a
+      # very long job log, which is where someone diagnosing the check
+      # will actually look. if: always() so a failing gate above still
+      # leaves the explanation behind.
+      - name: Name the configuration findings
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import pathlib
+
+          path = pathlib.Path("trivy-config.sarif")
+          if not path.is_file():
+              print("no trivy-config.sarif: the configuration scan did not run")
+              raise SystemExit(0)
+
+          report = json.loads(path.read_text())
+          rules = {}
+          for run in report.get("runs", []):
+              for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+                  rules[rule.get("id")] = rule
+
+          rows = []
+          for run in report.get("runs", []):
+              for result in run.get("results", []):
+                  rule_id = result.get("ruleId", "?")
+                  rule = rules.get(rule_id, {})
+                  # Trivy carries the real severity here; SARIF `level`
+                  # collapses everything above "note" into "error".
+                  severity = (
+                      rule.get("properties", {}).get("security-severity")
+                      or rule.get("defaultConfiguration", {}).get("level")
+                      or "?"
+                  )
+                  for location in result.get("locations", [{}]):
+                      phys = location.get("physicalLocation", {})
+                      uri = phys.get("artifactLocation", {}).get("uri", "?")
+                      line = phys.get("region", {}).get("startLine", "?")
+                      rows.append((rule_id, severity, f"{uri}:{line}",
+                                   result.get("message", {}).get("text", "")))
+
+          if not rows:
+              print("configuration scan: no findings at CRITICAL or HIGH")
+              raise SystemExit(0)
+
+          print(f"configuration scan: {len(rows)} finding(s)")
+          for rule_id, severity, where, message in rows:
+              print(f"  {rule_id}  severity={severity}  {where}")
+              print(f"      {message.splitlines()[0] if message else ''}")
+          PYTHON
+
+  containers:
+    name: Container images
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [state-service, webhook, samba]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the ${{ matrix.service }} image
+        run: |
+          docker build -t "forge-ai/${{ matrix.service }}:ci" "compose/${{ matrix.service }}"
+
+      - name: Scan it
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: forge-ai/${{ matrix.service }}:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0"        # report, do not block: base images lag
+          ignore-unfixed: true
+
+      - name: Confirm the image does not run as root
+        run: |
+          user=$(docker inspect --format '{{.Config.User}}' "forge-ai/${{ matrix.service }}:ci")
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            # Samba needs root to bind 445 and to switch to the guest
+            # account; it is documented as the one exception.
+            if [ "${{ matrix.service }}" = "samba" ]; then
+              echo "::notice::samba runs as root to bind port 445 -- documented in docs/SECURITY.md"
+            else
+              echo "::error::forge-ai/${{ matrix.service }} runs as root"
+              exit 1
+            fi
+          else
+            echo "runs as $user"
+          fi
+
+  dependencies:
+    name: Dependency review
+    runs-on: ubuntu-24.04
+    # Only meaningful on a pull request: it compares the base and head.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      # Dependency review needs the repository's Dependency graph to be
+      # enabled -- a SETTING, under Security & analysis, not something a
+      # workflow can turn on. It is unavailable on a private repository
+      # without GitHub Advanced Security.
+      #
+      # It is therefore advisory here rather than blocking. A required
+      # check that can never pass until someone flips a setting they were
+      # never told about is worse than no check: it trains reviewers to
+      # ignore red.
+      #
+      # The next step reports clearly which of the two happened.
+      - name: Review the dependency changes
+        id: review
+        continue-on-error: true
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+      - name: Report the outcome
+        run: |
+          case "${{ steps.review.outcome }}" in
+            success)
+              echo "Dependency review passed."
+              ;;
+            failure)
+              {
+                echo "### Dependency review"
+                echo
+                echo "This step did not pass. Either it found a high-severity"
+                echo "advisory -- open the step log and act on it -- or the"
+                echo "repository does not have **Dependency graph** enabled."
+                echo
+                echo "Enable it under **Settings → Security & analysis**."
+                echo "It is unavailable on a private repository without"
+                echo "GitHub Advanced Security; see \`docs/LIMITATIONS.md\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::dependency review did not pass -- see the run summary"
+              ;;
+          esac
+
+  summary:
+    name: Security summary
+    runs-on: ubuntu-24.04
+    needs: [secrets, forbidden-files, cleartext-passwords, filesystem, containers]
+    if: always()
+    steps:
+      - name: Report the outcome
+        run: |
+          {
+            echo "## Security summary"
+            echo
+            echo "| Control | Result |"
+            echo "|---|---|"
+            echo "| Secret scanning | ${{ needs.secrets.result }} |"
+            echo "| Forbidden file types | ${{ needs.forbidden-files.result }} |"
+            echo "| Cleartext credentials | ${{ needs.cleartext-passwords.result }} |"
+            echo "| Trivy filesystem and config | ${{ needs.filesystem.result }} |"
+            echo "| Container images | ${{ needs.containers.result }} |"
+            echo
+            echo "The threat model these controls address is in \`docs/SECURITY.md\`,"
+            echo "including what remains **unmitigated** in a PoC."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail when a blocking control failed
+        if: |
+          needs.secrets.result != 'success' ||
+          needs.forbidden-files.result != 'success' ||
+          needs.cleartext-passwords.result != 'success'
+        run: exit 1

@@ -1,0 +1,30 @@
+<!--
+  =====================================================================
+  FORGE-AI :: libvirt provisioning network
+  Rendered from ansible/templates/libvirt/network.xml.j2
+  =====================================================================
+  DHCP and DNS are deliberately NOT defined here. libvirt only spawns
+  its own dnsmasq when a network needs DHCP or DNS; with <dns
+  enable='no'/> and no <dhcp> element it creates the bridge, the NAT
+  rules and nothing else. That leaves the field clear for the FORGE-AI
+  dnsmasq instance, which needs arch-aware, tag-based PXE options that
+  libvirt's network XML cannot express.
+
+  Running two DHCP servers on one bridge is the classic way to make PXE
+  fail intermittently. See docs/TROUBLESHOOTING.md, "conflicting DHCP
+  server".
+-->
+<network>
+  <name>{{ provisioning_network.name }}</name>
+  <bridge name="{{ provisioning_network.bridge }}" stp="on" delay="0"/>
+{% if provisioning_network.forward_mode != 'isolated' %}
+  <forward mode="{{ provisioning_network.forward_mode }}">
+    <nat>
+      <port start="1024" end="65535"/>
+    </nat>
+  </forward>
+{% endif %}
+  <dns enable="no"/>
+  <ip address="{{ provisioning_network.gateway }}" netmask="{{ provisioning_network.netmask }}">
+  </ip>
+</network>

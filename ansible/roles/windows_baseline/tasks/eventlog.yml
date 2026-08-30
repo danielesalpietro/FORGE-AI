@@ -1,0 +1,51 @@
+---
+# =====================================================================
+# Event log sizing
+# =====================================================================
+# The default 20 MB Security log on a busy server wraps in hours, which
+# makes the audit trail this PoC claims to keep largely fictional.
+# =====================================================================
+
+- name: Size the primary event logs
+  ansible.windows.win_shell: |
+    $target = {{ baseline.windows.event_log_max_size_mb | int }} * 1MB
+    $changed = @()
+    foreach ($logName in @('Application','System','Security')) {
+      $log = Get-WinEvent -ListLog $logName
+      if ($log.MaximumSizeInBytes -lt $target) {
+        $log.MaximumSizeInBytes = $target
+        $log.LogMode = 'Circular'
+        $log.SaveChanges()
+        $changed += $logName
+      }
+    }
+    if ($changed) { Write-Output "changed:$($changed -join ',')" } else { Write-Output 'unchanged' }
+  register: forge_win_eventlog
+  changed_when: forge_win_eventlog.stdout is search('^changed:')
+  check_mode: false
+  failed_when: false
+  tags: [windows, security]
+
+- name: Enable the audit policies that matter
+  ansible.windows.win_audit_policy_system:
+    subcategory: "{{ item }}"
+    audit_type: success, failure
+  loop:
+    - Logon
+    - Logoff
+    - Account Lockout
+    - Special Logon
+    - Security Group Management
+    - User Account Management
+    - Process Creation
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+  tags: [windows, security]
+
+- name: Report the event log configuration
+  ansible.builtin.debug:
+    msg: >-
+      Event logs sized to {{ baseline.windows.event_log_max_size_mb }} MB
+      ({{ forge_win_eventlog.stdout | default('unchanged') | trim }}).
+  tags: [windows, security]

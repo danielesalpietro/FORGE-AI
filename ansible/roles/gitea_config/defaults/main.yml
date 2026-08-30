@@ -1,0 +1,13 @@
+---
+gitea_base_url: "http://127.0.0.1:{{ control_plane.gitea_http_port }}"
+gitea_api_url: "{{ gitea_base_url }}/api/v1"
+gitea_container: forge-gitea
+gitea_wait_timeout: 300
+# Create the organisation and the GitOps repository.
+gitea_manage_repository: true
+# Configure the push webhook to the receiver.
+gitea_manage_webhook: true
+gitea_webhook_url: "http://webhook:8000/webhook"
+# Mirror strategy only: the GitHub upstream Gitea pulls from.
+gitea_mirror_interval: 10m
+gitea_upstream_url: "https://github.com/{{ gitops.github_repository }}.git"

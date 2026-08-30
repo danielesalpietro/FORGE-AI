@@ -1,0 +1,62 @@
+---
+# =====================================================================
+# Audit logging
+# =====================================================================
+# A minimal, honest rule set: identity changes, sudoers changes, and
+# privilege escalation. It is not a compliance-grade audit policy, and
+# the README says so.
+# =====================================================================
+
+- name: Ensure auditd is installed
+  ansible.builtin.apt:
+    name: [auditd, audispd-plugins]
+    state: present
+  become: true
+  tags: [linux, security]
+
+- name: Install the FORGE-AI audit rules
+  ansible.builtin.copy:
+    content: |
+      ## Managed by FORGE-AI - ansible/roles/ubuntu_baseline
+      ## Demonstration rule set. Not a compliance-grade audit policy.
+
+      ## Identity and authorisation changes
+      -w /etc/passwd  -p wa -k forge_identity
+      -w /etc/shadow  -p wa -k forge_identity
+      -w /etc/group   -p wa -k forge_identity
+      -w /etc/gshadow -p wa -k forge_identity
+      -w /etc/sudoers -p wa -k forge_sudoers
+      -w /etc/sudoers.d/ -p wa -k forge_sudoers
+
+      ## SSH policy changes
+      -w /etc/ssh/sshd_config    -p wa -k forge_sshd
+      -w /etc/ssh/sshd_config.d/ -p wa -k forge_sshd
+
+      ## The desired-state marker: a change here means something other
+      ## than FORGE-AI wrote it.
+      -w /etc/forge-ai/ -p wa -k forge_state
+
+      ## Privilege escalation
+      -a always,exit -F arch=b64 -S execve -C uid!=euid -F euid=0 -k forge_privesc
+      -a always,exit -F arch=b32 -S execve -C uid!=euid -F euid=0 -k forge_privesc
+
+      ## Make the configuration immutable until the next reboot.
+      ## Deliberately NOT enabled: it would prevent this very role from
+      ## reapplying its own rules without a reboot, which turns every
+      ## drift reconciliation into an outage.
+      # -e 2
+    dest: /etc/audit/rules.d/50-forge-ai.rules
+    owner: root
+    group: root
+    mode: "0640"
+  become: true
+  notify: restart auditd
+  tags: [linux, security]
+
+- name: Enable and start auditd
+  ansible.builtin.systemd_service:
+    name: auditd
+    enabled: true
+    state: started
+  become: true
+  tags: [linux, security]

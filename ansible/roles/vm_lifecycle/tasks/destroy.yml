@@ -1,0 +1,85 @@
+---
+# =====================================================================
+# Destroy the target VMs
+# =====================================================================
+# Reached only from destroy-poc.yml, which refuses to run without
+#   -e confirm_destroy=DESTROY-POC
+# The guard lives in the playbook so this file is never reachable by a
+# mistyped tag.
+# =====================================================================
+
+- name: Confirm the destroy token before touching anything
+  ansible.builtin.assert:
+    that:
+      - confirm_destroy | default('') == safety.destroy_confirmation_token
+    fail_msg: |
+      Refusing to destroy virtual machines without explicit confirmation.
+
+        ansible-playbook playbooks/destroy-poc.yml -e confirm_destroy={{ safety.destroy_confirmation_token }}
+
+      This removes: {{ forge_hosts | map(attribute='name') | join(', ') }}
+      and their disk images. It cannot be undone.
+    success_msg: "Destroy confirmed for {{ forge_hosts | map(attribute='name') | join(', ') }}"
+  tags: [destroy]
+
+- name: Stop the running domains
+  community.libvirt.virt:
+    name: "{{ item }}"
+    state: destroyed
+    uri: qemu:///system
+  become: true
+  loop: "{{ forge_hosts | map(attribute='name') | list }}"
+  when: item in forge_existing_vms.list_vms
+  failed_when: false
+  tags: [destroy]
+
+- name: Undefine the domains and their NVRAM
+  # --nvram is essential. A retained UEFI variable store remembers the
+  # old boot order, so a rebuilt VM would boot a disk that no longer has
+  # an operating system on it.
+  ansible.builtin.command:
+    argv: "{{ ['virsh', '--connect', 'qemu:///system', 'undefine', item] + (['--nvram'] if vm_lifecycle_purge_nvram | bool else ['--keep-nvram']) }}"
+  become: true
+  loop: "{{ forge_hosts | map(attribute='name') | list }}"
+  when: item in forge_existing_vms.list_vms
+  register: forge_undefine
+  changed_when: forge_undefine.rc == 0
+  failed_when:
+    - forge_undefine.rc != 0
+    - "'failed to get domain' not in (forge_undefine.stderr | default(''))"
+  tags: [destroy]
+
+- name: Remove the disk images
+  ansible.builtin.file:
+    path: "{{ storage.libvirt_pool_path }}/{{ item }}.qcow2"
+    state: absent
+  become: true
+  loop: "{{ forge_hosts | map(attribute='name') | list }}"
+  tags: [destroy]
+
+- name: Reset the lifecycle state so a rebuild starts clean
+  ansible.builtin.uri:
+    url: "{{ forge_boot_base_url }}/api/state/{{ item.mac_address | mac_hyphen }}"
+    method: POST
+    body_format: json
+    body:
+      state: new
+      source: ansible-destroy
+      host: "{{ item.name }}"
+      detail: "destroyed by {{ forge_operator }}"
+    headers: "{{ {'X-Forge-Token': forge_state_token} if forge_state_token | length > 0 else {} }}"
+    status_code: [200]
+  loop: "{{ forge_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  failed_when: false
+  tags: [destroy]
+
+- name: Report what was removed
+  ansible.builtin.debug:
+    msg: >-
+      Removed domains and disks for
+      {{ forge_hosts | map(attribute='name') | join(', ') }}.
+      The provisioning network, the control plane and the prepared media are
+      untouched -- destroy-poc.yml removes those separately.
+  tags: [destroy]

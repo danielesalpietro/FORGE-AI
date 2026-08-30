@@ -1,0 +1,135 @@
+---
+# =====================================================================
+# windows_baseline -- desired state for the Windows Server target
+# =====================================================================
+# Check-mode caveat, stated up front because it shapes the whole role:
+# several ansible.windows and community.windows modules support check
+# mode only partially. win_shell and win_command do not support it at
+# all and are skipped entirely, which means a drift run relying on check
+# mode alone would be blind to anything they manage.
+#
+# That is why every control here has a matching read-only probe in
+# group_vars/windows/main.yml (forge_windows_probes). The drift report
+# combines both and labels which came from where.
+# See docs/OPERATIONS.md, "check-mode limitations".
+# =====================================================================
+
+- name: Gather the Windows facts
+  ansible.windows.setup:
+  tags: [windows, validation]
+
+- name: Confirm this is the host the inventory thinks it is
+  ansible.builtin.assert:
+    that:
+      # Windows truncates the NetBIOS name to 15 characters, so compare
+      # against the same truncation the answer file applied.
+      - ansible_hostname | upper == inventory_hostname | upper | truncate(15, true, '')
+    fail_msg: >-
+      Connected to {{ inventory_hostname }} ({{ ansible_host }}) but the machine
+      calls itself '{{ ansible_hostname }}'. Either the DHCP reservation points at
+      the wrong VM, or Autounattend.xml set a different ComputerName.
+      Check: virsh net-dhcp-leases {{ provisioning_network.name }}
+    success_msg: "{{ inventory_hostname }} identity confirmed ({{ ansible_hostname }})"
+  tags: [windows, validation]
+
+- name: Report the installed edition
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ ansible_os_name }}
+      ({{ ansible_distribution_version }}, build {{ ansible_os_installation_type | default('unknown') }})
+  tags: [windows, validation]
+
+- name: Create the FORGE-AI state directory
+  ansible.windows.win_file:
+    path: "{{ windows_baseline_state_dir }}"
+    state: directory
+  tags: [windows, bootstrap]
+
+- name: Record the applied desired state
+  ansible.windows.win_copy:
+    content: "{{ marker | to_nice_json }}\n"
+    dest: '{{ windows_baseline_state_dir }}\state.json'
+  vars:
+    marker:
+      host: "{{ inventory_hostname }}"
+      profile: "{{ forge_host.profile }}"
+      deployment_id: "{{ forge_deployment_id }}"
+      git_commit: "{{ forge_git_commit }}"
+      git_branch: "{{ forge_git_branch }}"
+      applied_at: "{{ ansible_date_time.iso8601 | default('unknown') }}"
+      applied_by: "{{ forge_operator }}"
+      trigger: "{{ forge_trigger }}"
+  tags: [windows, bootstrap]
+
+- name: Include the SMB hardening
+  ansible.builtin.include_tasks: smb.yml
+  when: windows_baseline_disable_smbv1 | bool
+  tags: [windows, security]
+
+- name: Include the firewall configuration
+  ansible.builtin.include_tasks: firewall.yml
+  when: windows_baseline_manage_firewall | bool
+  tags: [windows, security]
+
+- name: Include the Defender checks
+  ansible.builtin.include_tasks: defender.yml
+  when: windows_baseline_manage_defender | bool
+  tags: [windows, security]
+
+- name: Include the TLS baseline
+  ansible.builtin.include_tasks: tls.yml
+  when: windows_baseline_manage_tls | bool
+  tags: [windows, security]
+
+- name: Include the local administrator governance
+  ansible.builtin.include_tasks: accounts.yml
+  tags: [windows, security]
+
+- name: Include the update policy
+  ansible.builtin.include_tasks: updates.yml
+  when: windows_baseline_manage_updates | bool
+  tags: [windows, security]
+
+- name: Include the event log configuration
+  ansible.builtin.include_tasks: eventlog.yml
+  tags: [windows, security]
+
+- name: Set the PowerShell execution policy
+  ansible.windows.win_shell: |
+    $desired = '{{ baseline.windows.powershell_execution_policy }}'
+    $current = Get-ExecutionPolicy -Scope LocalMachine
+    if ($current -ne $desired) {
+      Set-ExecutionPolicy -ExecutionPolicy $desired -Scope LocalMachine -Force
+      Write-Output "changed:$current->$desired"
+    } else {
+      Write-Output "unchanged:$current"
+    }
+  register: forge_win_execpolicy
+  changed_when: forge_win_execpolicy.stdout is search('^changed:')
+  # win_shell has no check mode. Skipping it there is correct; the
+  # matching probe in forge_windows_probes covers the drift case.
+  check_mode: false
+  tags: [windows, security]
+
+- name: Install the QEMU guest agent
+  ansible.builtin.include_tasks: guest-agent.yml
+  when: baseline.windows.install_qemu_guest_agent | default(true)
+  tags: [windows, bootstrap]
+
+- name: Install the requested Windows features
+  ansible.windows.win_feature:
+    name: "{{ forge_windows_features }}"
+    state: present
+    include_management_tools: true
+  register: forge_win_features
+  when: forge_windows_features | default([]) | length > 0
+  notify: "{{ 'reboot windows' if forge_win_features.reboot_required | default(false) else omit }}"
+  tags: [windows, bootstrap]
+
+- name: Apply any pending reboot
+  ansible.builtin.meta: flush_handlers
+  tags: [windows, bootstrap]
+
+- name: Include the final validation
+  ansible.builtin.include_tasks: validate.yml
+  tags: [windows, validation]

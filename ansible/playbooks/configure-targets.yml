@@ -1,0 +1,100 @@
+---
+# =====================================================================
+# Apply the baseline configuration to every provisioned target.
+# =====================================================================
+#   make configure
+#   ansible-playbook playbooks/configure-targets.yml --limit linux
+#   ansible-playbook playbooks/configure-targets.yml --check     (drift)
+#
+# This is the playbook detect-drift.yml runs in check mode, so every
+# task in the roles it calls has to be a clean statement of desired
+# state.
+# =====================================================================
+- name: Configure the Ubuntu targets
+  hosts: linux
+  gather_facts: true
+  become: true
+  tags: [linux, configuration]
+
+  pre_tasks:
+    - name: Record when configuration started
+      ansible.builtin.set_fact:
+        forge_configure_started_epoch: "{{ ansible_date_time.epoch }}"
+      tags: [always]
+
+  roles:
+    - role: ubuntu_baseline
+      tags: [linux]
+
+  post_tasks:
+    - name: Record the configuration result
+      ansible.builtin.set_fact:
+        forge_configuration_result: "baseline applied"
+        forge_host_duration: >-
+          {{ (ansible_date_time.epoch | int) - (forge_configure_started_epoch | int) }}
+        forge_host_status: success
+        cacheable: true
+      when: not ansible_check_mode
+      tags: [always]
+
+    - name: Advance the lifecycle state to 'ready'
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/state/{{ forge_mac_hyphen }}"
+        method: POST
+        body_format: json
+        body:
+          state: ready
+          source: ansible-configure-targets
+          host: "{{ inventory_hostname }}"
+          detail: "baseline applied from commit {{ forge_git_commit }}"
+        headers: "{{ {'X-Forge-Token': forge_state_token} if forge_state_token | length > 0 else {} }}"
+        status_code: [200, 409]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not ansible_check_mode
+      tags: [always]
+
+- name: Configure the Windows targets
+  hosts: windows
+  gather_facts: false
+  tags: [windows, configuration]
+
+  pre_tasks:
+    - name: Record when configuration started
+      ansible.builtin.set_fact:
+        forge_configure_started_epoch: "{{ lookup('pipe', 'date +%s') }}"
+      tags: [always]
+
+  roles:
+    - role: windows_baseline
+      tags: [windows]
+
+  post_tasks:
+    - name: Record the configuration result
+      ansible.builtin.set_fact:
+        forge_configuration_result: "baseline applied"
+        forge_host_duration: >-
+          {{ (lookup('pipe', 'date +%s') | int) - (forge_configure_started_epoch | int) }}
+        forge_host_status: success
+        cacheable: true
+      when: not ansible_check_mode
+      tags: [always]
+
+    - name: Advance the lifecycle state to 'ready'
+      ansible.builtin.uri:
+        url: "{{ forge_boot_base_url }}/api/state/{{ forge_mac_hyphen }}"
+        method: POST
+        body_format: json
+        body:
+          state: ready
+          source: ansible-configure-targets
+          host: "{{ inventory_hostname }}"
+          detail: "baseline applied from commit {{ forge_git_commit }}"
+        headers: "{{ {'X-Forge-Token': forge_state_token} if forge_state_token | length > 0 else {} }}"
+        status_code: [200, 409]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not ansible_check_mode
+      tags: [always]

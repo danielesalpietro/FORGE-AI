@@ -1,0 +1,60 @@
+# =====================================================================
+# FORGE-AI :: dedicated dnsmasq instance
+# Rendered from ansible/templates/dnsmasq/forge-dnsmasq.service.j2
+# =====================================================================
+# A dedicated unit, not a drop-in under /etc/dnsmasq.d, so that
+# FORGE-AI never changes the behaviour of a dnsmasq this host already
+# runs -- and so that teardown can stop DHCP without touching host
+# networking.
+
+[Unit]
+Description=FORGE-AI provisioning DHCP/DNS/TFTP ({{ provisioning_network.name }})
+Documentation=https://github.com/danielesalpietro-FORGE-AI/blob/main/docs/ARCHITECTURE.md
+After=network-online.target libvirtd.service
+Wants=network-online.target
+# The bridge is created by libvirt; without it dnsmasq has nothing to
+# bind to and would restart-loop.
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/dnsmasq --test --conf-file={{ forge_dnsmasq_config }}
+ExecStart={{ pxe_dnsmasq_binary }} --keep-in-foreground --conf-file={{ forge_dnsmasq_config }} --pid-file=
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# dnsmasq needs CAP_NET_BIND_SERVICE (ports 67/69) and CAP_NET_RAW
+# (raw DHCP sockets). CAP_SETPCAP is not for dnsmasq's own networking:
+# it is what lets a process adjust its own capability sets at all: even
+# running as root, dnsmasq calls capset() on startup as part of its own
+# hardening, and without CAP_SETPCAP that call itself is refused
+# ("setting capabilities failed: Operation not permitted", confirmed
+# via journalctl -- the config and every other capability here were
+# already correct, checked by running dnsmasq manually with full sudo
+# and watching DHCP/TFTP both bind cleanly).
+User=root
+Group=root
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN CAP_SETPCAP
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_SETPCAP
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# No further seccomp-installing sandboxing here (ProtectKernelTunables,
+# ProtectKernelModules, ProtectControlGroups, RestrictNamespaces,
+# RestrictRealtime, RestrictSUIDSGID, MemoryDenyWriteExecute,
+# LockPersonality, SystemCallArchitectures=native): confirmed by
+# bisecting each one individually on the real host that EVERY one of
+# them, alone, makes dnsmasq's own internal capset() call fail with
+# "setting capabilities failed: Operation not permitted" -- while the
+# capability directives above and this ProtectSystem/ProtectHome/
+# PrivateTmp trio (mount-namespace-only, no seccomp filter) do not.
+# The exact syscall these filters block was not identified further;
+# what's confirmed is that adding any of them breaks TFTP/DHCP outright,
+# so they are deliberately left off rather than fought one at a time.
+ReadWritePaths={{ storage.state_dir }} {{ storage.log_dir }}
+ReadOnlyPaths={{ storage.tftp_root }} {{ forge_dnsmasq_config | dirname }}
+
+[Install]
+WantedBy=multi-user.target

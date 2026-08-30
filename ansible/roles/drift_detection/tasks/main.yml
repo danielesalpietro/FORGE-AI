@@ -1,0 +1,117 @@
+---
+# =====================================================================
+# drift_detection -- what actually differs from the desired state
+# =====================================================================
+# Two independent sources, because neither is sufficient alone:
+#
+#   1. Ansible check mode. Broad coverage, but its accuracy depends on
+#      each module implementing check mode properly. Many
+#      ansible.windows modules do so only partially, and win_shell not
+#      at all. A check-mode-only report over-reports on Linux (cosmetic
+#      "would change") and under-reports on Windows (silent blind spots).
+#
+#   2. Read-only compliance probes. Narrow coverage -- only what someone
+#      wrote a probe for -- but they read the live machine, so what they
+#      say is what is true.
+#
+# The report labels which finding came from which source. Claiming a
+# single number for "drift" without that distinction would be dishonest.
+# =====================================================================
+
+- name: Collect the check-mode results for this host
+  ansible.builtin.set_fact:
+    forge_drift_changed: >-
+      {{ (forge_check_results | default({})).get(inventory_hostname, [])
+         | map('community.general.json_query', '{task: task, resource: resource, detail: detail}')
+         | list }}
+  tags: [drift, validation]
+
+- name: Run the read-only compliance probes on Linux
+  ansible.builtin.shell:
+    cmd: "{{ item.command }}{{ ' | grep -i ' ~ item.filter if item.filter | default('') | length > 0 else '' }}"
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: forge_drift_linux_probes
+  loop: "{{ forge_linux_probes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - drift_run_probes | bool
+    - forge_host.os_family == 'linux'
+  tags: [drift, validation, linux]
+
+- name: Run the read-only compliance probes on Windows
+  ansible.windows.win_shell: "{{ item.command }}"
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: forge_drift_windows_probes
+  loop: "{{ forge_windows_probes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - drift_run_probes | bool
+    - forge_host.os_family == 'windows'
+  tags: [drift, validation, windows]
+
+- name: Evaluate the probe results
+  ansible.builtin.set_fact:
+    forge_drift_probe_failures: >-
+      {{ forge_drift_probe_failures | default([]) + ([{
+           'name': item.item.name,
+           'expected': item.item.expect | string | trim,
+           'observed': item.stdout | default('') | trim,
+           'source': 'compliance-probe'
+         }] if (item.stdout | default('') | trim | lower) != (item.item.expect | string | trim | lower) else []) }}
+  loop: >-
+    {{ (forge_drift_linux_probes.results | default([]))
+       + (forge_drift_windows_probes.results | default([])) }}
+  loop_control:
+    label: "{{ item.item.name | default('probe') }}"
+  when: item.item is defined
+  tags: [drift, validation]
+
+- name: Record which modules could not be checked
+  # Named explicitly so the report can say where it is blind rather than
+  # implying full coverage.
+  ansible.builtin.set_fact:
+    forge_drift_blind_spots: >-
+      {{ ['ansible.windows.win_shell (no check-mode support)',
+          'ansible.windows.win_updates (no check-mode support)',
+          'community.windows.win_security_policy (partial check-mode support)']
+         if forge_host.os_family == 'windows'
+         else ['ansible.builtin.command / shell tasks marked changed_when: false'] }}
+  tags: [drift, validation]
+
+- name: Assemble this host's drift result
+  ansible.builtin.set_fact:
+    forge_drift_host_result:
+      name: "{{ inventory_hostname }}"
+      os_family: "{{ forge_host.os_family }}"
+      ip_address: "{{ forge_host.ip_address }}"
+      reachable: true
+      changed: "{{ forge_drift_changed | default([]) }}"
+      probe_failures: "{{ forge_drift_probe_failures | default([]) }}"
+      check_mode_unsupported: "{{ forge_drift_blind_spots | default([]) }}"
+      drifted: >-
+        {{ (forge_drift_changed | default([]) | length > 0)
+           or (forge_drift_probe_failures | default([]) | length > 0) }}
+    cacheable: true
+  tags: [drift, validation]
+
+- name: Report this host's drift
+  ansible.builtin.debug:
+    msg: |
+      {{ inventory_hostname }}: {{ 'DRIFTED' if forge_drift_host_result.drifted else 'in sync' }}
+        check-mode changes    : {{ forge_drift_host_result.changed | length }}
+        probe failures        : {{ forge_drift_host_result.probe_failures | length }}
+      {% for probe in forge_drift_host_result.probe_failures %}
+        - {{ probe.name }}: expected '{{ probe.expected }}', observed '{{ probe.observed | default('(no output)') }}'
+      {% endfor %}
+      {% for change in forge_drift_host_result.changed %}
+        - would change: {{ change.task }}
+      {% endfor %}
+  tags: [drift, validation]

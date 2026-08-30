@@ -1,0 +1,9 @@
+---
+windows_baseline_manage_firewall: "{{ baseline.windows.firewall_profiles_enabled | default(true) }}"
+windows_baseline_manage_updates: true
+windows_baseline_manage_defender: "{{ baseline.windows.defender_required | default(true) }}"
+windows_baseline_disable_smbv1: "{{ baseline.windows.disable_smbv1 | default(true) }}"
+windows_baseline_manage_tls: true
+windows_baseline_allow_reboot: true
+windows_baseline_reboot_timeout: 1800
+windows_baseline_state_dir: 'C:\ProgramData\forge-ai'

@@ -1,0 +1,67 @@
+---
+name: Feature request
+description: Propose a capability this PoC does not have
+title: "[feat] "
+labels: [enhancement, triage]
+body:
+
+  - type: markdown
+    attributes:
+      value: |
+        `docs/LIMITATIONS.md` records what this PoC deliberately does not
+        do, and `README.md` has the roadmap. Please check both — a
+        limitation listed there is a known trade-off rather than an
+        oversight, though arguing it should change is entirely fair.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The situation, not the solution.
+      placeholder: |
+        Provisioning a third host means editing config/poc.yml and
+        re-running the whole site.yml, which reboots the two working ones.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Configuration model
+        - Boot chain (PXE / iPXE / state service)
+        - Ubuntu provisioning
+        - Windows provisioning
+        - Control plane (Gitea / Semaphore)
+        - Drift and reconciliation
+        - Reporting
+        - Security
+        - Documentation
+        - Testing
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you already tried or considered?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I have read `docs/LIMITATIONS.md` and this is not a documented trade-off
+          required: true
+        - label: I would be willing to work on this
+          required: false

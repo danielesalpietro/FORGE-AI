@@ -1,0 +1,199 @@
+@echo off
+rem =====================================================================
+rem FORGE-AI :: WinPE entry point for {{ host.name }}
+rem Injected into \Windows\System32\startnet.cmd by wimboot.
+rem Rendered from ansible/templates/windows/startnet.cmd.j2
+rem =====================================================================
+rem Deployment : {{ forge_deployment_id | default('manual') }}
+rem Commit     : {{ forge_git_commit | default('unknown') }}
+rem
+rem WinPE taken from the operator-supplied Windows Server ISO provides
+rem cmd.exe, diskpart, dism, drvload, wpeinit, net.exe and setup.exe.
+rem It does NOT provide PowerShell, so everything here is batch.
+
+setlocal enableextensions
+set FORGE_HOST={{ host.name }}
+set FORGE_MAC={{ host.mac_address | replace(':', '-') }}
+set FORGE_BOOT={{ forge_boot_base_url }}
+set FORGE_SHARE=\\{{ provisioning_network.gateway }}\{{ windows_media_share_name | default('winmedia') }}
+set FORGE_SRC=I:
+set FORGE_LOG=X:\forge-ai.log
+
+echo ================================================================= > "%FORGE_LOG%"
+echo FORGE-AI WinPE bootstrap - %FORGE_HOST% (%FORGE_MAC%)             >> "%FORGE_LOG%"
+echo ================================================================= >> "%FORGE_LOG%"
+
+echo.
+echo  FORGE-AI :: preparing %FORGE_HOST%
+echo.
+
+rem -------------------------------------------------------------------
+rem 1. VirtIO drivers -- storage first, then network.
+rem    WinPE has no in-box VirtIO driver, so without this step diskpart
+rem    sees no disk and wpeinit finds no NIC.
+rem    docs/TROUBLESHOOTING.md -> "Windows cannot load VirtIO disk"
+rem -------------------------------------------------------------------
+echo [1/6] Loading VirtIO drivers... & echo [1/6] drvload >> "%FORGE_LOG%"
+for %%D in ({{ winpe_driver_inf_names | default(['viostor.inf', 'vioscsi.inf', 'netkvm.inf', 'balloon.inf', 'vioser.inf']) | join(' ') }}) do (
+  if exist "X:\Windows\System32\drivers\forge\%%D" (
+    drvload "X:\Windows\System32\drivers\forge\%%D" >> "%FORGE_LOG%" 2>&1
+  )
+)
+
+rem -------------------------------------------------------------------
+rem 2. Bring up networking.
+rem -------------------------------------------------------------------
+echo [2/6] Initialising network... & echo [2/6] wpeinit >> "%FORGE_LOG%"
+wpeinit >> "%FORGE_LOG%" 2>&1
+rem Give DHCP a moment; the reservation for %FORGE_MAC% pins
+rem {{ host.ip_address }}.
+for /L %%i in (1,1,{{ winpe_network_retries | default(30) }}) do (
+  ping -n 2 {{ provisioning_network.gateway }} >nul 2>&1 && goto :net_ok
+  ping -n 2 127.0.0.1 >nul 2>&1
+)
+echo [error] No route to the boot server {{ provisioning_network.gateway }}. >> "%FORGE_LOG%"
+goto :fail
+
+:net_ok
+ipconfig /all >> "%FORGE_LOG%" 2>&1
+echo       IP acquired. >> "%FORGE_LOG%"
+
+rem -------------------------------------------------------------------
+rem 3. Mount the installation source.
+rem    Primary: read-only SMB export of the extracted Windows ISO.
+rem    WinPE's net.exe is guaranteed present; curl.exe is not, which is
+rem    why SMB and not HTTP carries the multi-gigabyte install.wim.
+rem -------------------------------------------------------------------
+echo [3/6] Mounting %FORGE_SHARE%... & echo [3/6] net use >> "%FORGE_LOG%"
+net use %FORGE_SRC% "%FORGE_SHARE%" /persistent:no >> "%FORGE_LOG%" 2>&1
+if errorlevel 1 (
+  echo       retrying with explicit guest credentials... >> "%FORGE_LOG%"
+  net use %FORGE_SRC% "%FORGE_SHARE%" /user:guest "" /persistent:no >> "%FORGE_LOG%" 2>&1
+)
+if not exist "%FORGE_SRC%\sources\install.wim" (
+  if not exist "%FORGE_SRC%\sources\install.esd" (
+    echo [error] Installation source not reachable at %FORGE_SHARE%. >> "%FORGE_LOG%"
+    echo         docs/TROUBLESHOOTING.md -^> "Windows Setup cannot retrieve installation files" >> "%FORGE_LOG%"
+    goto :fail
+  )
+)
+
+rem -------------------------------------------------------------------
+rem 4. Wipe and partition the target disk (UEFI / GPT).
+rem    diskpart is scripted so the layout matches the DiskConfiguration
+rem    block in Autounattend.xml exactly. Setup would do this itself,
+rem    but a pre-wipe makes reruns deterministic: a leftover ESP from a
+rem    previous attempt is the single most common cause of a silent
+rem    "Windows cannot be installed to this disk".
+rem
+rem    online/attributes clear readonly come before clean: a disk that
+rem    already carries a partition table from an earlier attempt on
+rem    this same host can come up offline or read-only, and "clean"
+rem    itself refuses to run on such a disk ("Virtual Disk Service
+rem    error: The operation is not allowed on a disk that is
+rem    offline."), confirmed on a real rerun in this environment. Both
+rem    commands are harmless no-ops on a disk that is already online
+rem    and writable.
+rem -------------------------------------------------------------------
+echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
+(
+  echo select disk 0
+  echo online disk
+  echo attributes disk clear readonly
+  echo clean
+  echo convert gpt
+  echo rescan
+) > X:\forge-diskpart.txt
+diskpart /s X:\forge-diskpart.txt >> "%FORGE_LOG%" 2>&1
+rem bug 32 (docs/logbook/06-fase6-provisioning-windows.md): setup.exe
+rem launched immediately after "clean"/"convert gpt" consistently failed
+rem with 0xC190011F, before ever writing setupact.log, while the exact
+rem same setup.exe invocation launched by hand minutes later on the
+rem same disk succeeded and reached the interactive GUI -- a race
+rem between diskpart's disk operations and Setup's own disk
+rem enumeration, not an answer-file problem (confirmed separately by
+rem testing with no answer file at all). "rescan" forces diskpart to
+rem re-enumerate synchronously before this script continues, so Setup
+rem never sees a disk mid-transition.
+timeout /t 5 /nobreak >nul
+
+rem -------------------------------------------------------------------
+rem 5. Announce that installation has started.
+rem -------------------------------------------------------------------
+echo [5/6] Reporting state... & echo [5/6] state callback >> "%FORGE_LOG%"
+if exist "%SystemRoot%\System32\curl.exe" (
+  curl.exe --silent --max-time 15 -X POST -H "Content-Type: application/json" ^
+{% if forge_state_token | default('') | length > 0 %}
+    -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
+    -d "{\"state\":\"installing\",\"source\":\"winpe\",\"host\":\"%FORGE_HOST%\"}" ^
+    "%FORGE_BOOT%/api/state/%FORGE_MAC%" >> "%FORGE_LOG%" 2>&1
+) else (
+  echo       curl.exe absent in this WinPE build; state stays "installing". >> "%FORGE_LOG%"
+)
+
+rem -------------------------------------------------------------------
+rem 6. Hand over to Windows Setup.
+rem    No /unattend: flag: Autounattend.xml arrives on a separate CD-ROM
+rem    (domain.xml.j2, windows_attach_unattend_cdrom), and Setup finds
+rem    it there through its own auto-detection. Two earlier approaches
+rem    were tried and dropped -- injecting the drivers/answer file into
+rem    the wrong boot.wim image (bug 28) and injecting the answer file
+rem    into WinPE's own System32 under a name chosen specifically to
+rem    dodge Setup's auto-detected path (bug 30) -- both caused by the
+rem    same underlying choice to deliver the file through wimboot
+rem    injection rather than a real removable medium. See
+rem    docs/logbook/06-fase6-provisioning-windows.md.
+rem    /noreboot is deliberately NOT used: Setup must reboot itself, and
+rem    the iPXE state service now answers "installed" for this MAC so
+rem    the next network boot falls through to the local disk.
+rem -------------------------------------------------------------------
+echo [6/6] Starting Windows Setup (this takes 15-30 minutes)...
+echo [6/6] setup.exe >> "%FORGE_LOG%"
+copy /y "%FORGE_LOG%" %FORGE_SRC%\..\logs\%FORGE_HOST%-winpe.log >nul 2>&1
+
+rem bug 32 (docs/logbook/06-fase6-provisioning-windows.md): the FIRST
+rem setup.exe launch right after diskpart's clean/convert gpt/rescan
+rem consistently returns control with errorlevel -1047527137
+rem (0xC190011F) before ever writing setupact.log -- confirmed on real
+rem hardware to be unrelated to the answer file (it happens identically
+rem with no answer file at all). Every subsequent launch on the exact
+rem same disk succeeds, regardless of how long is waited in between, so
+rem this is not a fixed settle time -- something about the first call
+rem itself, not yet understood, leaves the disk ready for the next one.
+rem A bounded retry is the pragmatic fix: if Setup actually succeeds it
+rem reboots the machine and none of this runs again anyway, so retrying
+rem unconditionally on any non-reboot return is safe.
+set FORGE_SETUP_TRIES=0
+:setup_retry
+set /a FORGE_SETUP_TRIES+=1
+%FORGE_SRC%\setup.exe
+set FORGE_SETUP_RC=%errorlevel%
+echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
+if %FORGE_SETUP_TRIES% lss 3 (
+  timeout /t 60 /nobreak >nul
+  goto :setup_retry
+)
+
+rem Setup normally reboots and never returns here.
+echo [error] setup.exe returned control with errorlevel %FORGE_SETUP_RC% after %FORGE_SETUP_TRIES% attempts. >> "%FORGE_LOG%"
+goto :fail
+
+:fail
+echo.
+echo  ==========================================================
+echo   FORGE-AI: WinPE bootstrap FAILED for %FORGE_HOST%
+echo   Log: %FORGE_LOG%  (and X:\Windows\Panther\)
+echo   The window stays open so the log can be read.
+echo  ==========================================================
+echo.
+if exist "%SystemRoot%\System32\curl.exe" (
+  curl.exe --silent --max-time 15 -X POST -H "Content-Type: application/json" ^
+{% if forge_state_token | default('') | length > 0 %}
+    -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
+    -d "{\"state\":\"failed\",\"source\":\"winpe\",\"host\":\"%FORGE_HOST%\"}" ^
+    "%FORGE_BOOT%/api/state/%FORGE_MAC%" >nul 2>&1
+)
+type "%FORGE_LOG%"
+cmd.exe

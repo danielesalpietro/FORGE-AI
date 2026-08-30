@@ -1,0 +1,40 @@
+---
+# =====================================================================
+# FORGE-AI :: ansible-lint configuration
+# =====================================================================
+profile: production
+
+exclude_paths:
+  - collections/
+  - .cache/
+  - ../tests/fixtures/
+  - ../compose/
+
+# Rules disabled with a reason. Anything not listed here is enforced.
+skip_list:
+  # The dynamic inventory publishes the merged configuration as group
+  # variables named after the config keys (deployment, storage, media,
+  # security ...). Prefixing them all with the role name would make the
+  # templates unreadable and would break the single-source-of-truth
+  # relationship with config/poc.yml.
+  - var-naming[no-role-prefix]
+
+warn_list:
+  # Long Jinja expressions in set_fact are used to assemble report
+  # structures. Splitting them would not make them clearer.
+  - jinja[spacing]
+
+# Every module must be fully qualified.
+enable_list:
+  - fqcn
+  - no-log-password
+  - args
+
+mock_roles: []
+mock_modules: []
+
+kinds:
+  - playbook: "playbooks/*.yml"
+  - tasks: "roles/*/tasks/*.yml"
+  - vars: "inventories/*/group_vars/**/*.yml"
+  - vars: "inventories/*/host_vars/*.yml"

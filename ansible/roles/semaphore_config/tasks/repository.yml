@@ -1,0 +1,167 @@
+---
+# =====================================================================
+# Repository and inventory
+# =====================================================================
+
+- name: List the existing repositories
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/repositories"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_repos
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the repository entry
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/repositories"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "gitea-gitops"
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      git_url: "{{ semaphore_repo_url }}"
+      git_branch: "{{ semaphore_repo_branch }}"
+      # 'None' is a real Semaphore key type meaning "no credential".
+      # Correct here: Gitea is reached over the internal Docker network
+      # and the repository is cloned over HTTP with a token in the URL
+      # only when the operator configures one.
+      ssh_key_id: "{{ (forge_semaphore_key_ids['None'] | default(1)) | int }}"
+    status_code: [201, 204]
+  when: forge_semaphore_repos.json | selectattr('name', 'eq', 'gitea-gitops') | list | length == 0
+  register: forge_semaphore_repo_created
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Re-read the repositories
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/repositories"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_repos_final
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Resolve the repository id
+  ansible.builtin.set_fact:
+    forge_semaphore_repo_id: >-
+      {{ forge_semaphore_repos_final.json | selectattr('name', 'eq', 'gitea-gitops')
+         | map(attribute='id') | first }}
+  tags: [bootstrap, gitops]
+
+- name: List the existing inventories
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/inventory"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_inventories
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Create the inventory entry
+  # type "file" points Semaphore at a path inside the cloned repository,
+  # which is the dynamic inventory directory. That keeps config/poc.yml
+  # the single source of truth even for Semaphore-driven runs.
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/inventory"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "poc"
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      inventory: "{{ semaphore_inventory_path }}"
+      type: file
+      ssh_key_id: "{{ (forge_semaphore_key_ids['forge-ai-ssh'] | default(1)) | int }}"
+      become_key_id: "{{ (forge_semaphore_key_ids['forge-ai-ssh'] | default(1)) | int }}"
+    status_code: [201, 204]
+  when: forge_semaphore_inventories.json | selectattr('name', 'eq', 'poc') | list | length == 0
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Re-read the inventories
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/inventory"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_inventories_final
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Resolve the inventory id
+  ansible.builtin.set_fact:
+    forge_semaphore_inventory_id: >-
+      {{ forge_semaphore_inventories_final.json | selectattr('name', 'eq', 'poc')
+         | map(attribute='id') | first }}
+  tags: [bootstrap, gitops]
+
+- name: List the existing environments
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/environment"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_envs
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Render the environment definition
+  ansible.builtin.set_fact:
+    forge_semaphore_environment_json: "{{ lookup('ansible.builtin.template', forge_shared_templates_dir ~ '/semaphore/environment.json.j2') }}"
+  tags: [bootstrap, gitops]
+
+- name: Create the environment entry
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/environment"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "poc"
+      project_id: "{{ forge_semaphore_project_id | int }}"
+      json: "{{ forge_semaphore_environment_json }}"
+      env: "{{ {'ANSIBLE_FORCE_COLOR': '1', 'FORGE_TRIGGER': 'semaphore'} | to_json }}"
+    status_code: [201, 204]
+  when: forge_semaphore_envs.json | selectattr('name', 'eq', 'poc') | list | length == 0
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Re-read the environments
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/environment"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_envs_final
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Resolve the environment id
+  ansible.builtin.set_fact:
+    forge_semaphore_environment_id: >-
+      {{ forge_semaphore_envs_final.json | selectattr('name', 'eq', 'poc')
+         | map(attribute='id') | first }}
+  tags: [bootstrap, gitops]
