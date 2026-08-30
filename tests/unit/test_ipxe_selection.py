@@ -133,7 +133,10 @@ def test_the_installer_stops_being_offered_at_the_limit(state_service, ubuntu_ma
 
     assert status == 200
     assert "install.ipxe" not in script
-    assert "sanboot" in script
+    # bug 22 (docs/logbook/05-fase6-provisioning-target-vm.md): sanboot
+    # is a BIOS/legacy trick that fails on UEFI guests; local boot falls
+    # through to firmware via a plain `exit` instead.
+    assert "exit" in script
     assert "refusing to reinstall" in script
 
 
@@ -188,7 +191,8 @@ def test_an_installed_host_boots_locally(state_service, ubuntu_mac, state):
 
     _, script = state_service.dispatch(ubuntu_mac)
 
-    assert "sanboot" in script
+    # bug 22: sanboot fails on UEFI guests, local boot uses a plain exit.
+    assert "exit" in script
     assert "install.ipxe" not in script
     assert f"state={state}" in script
 
@@ -293,7 +297,8 @@ def test_boot_script_has_a_local_disk_fallback(jinja_env, base_config):
     script = jinja_env.get_template("ipxe/boot.ipxe.j2").render(
         **render_context.build_context(base_config)
     )
-    assert "sanboot" in script
+    # bug 22: sanboot fails on UEFI guests, local boot uses a plain exit.
+    assert "exit" in script
     assert ":localboot" in script
 
 
@@ -332,8 +337,10 @@ def test_ubuntu_install_script_seeds_with_a_trailing_slash(jinja_env, base_confi
 
 
 def test_windows_install_script_fetches_the_wimboot_file_set(jinja_env, base_config):
-    """wimboot needs all four, plus the per-host files it injects into
-    \\Windows\\System32."""
+    """wimboot needs all four, plus the per-host startnet.cmd it injects
+    into \\Windows\\System32. Autounattend.xml deliberately does NOT
+    travel this way (bug 28/30, docs/logbook/06-fase6-provisioning-windows.md):
+    it arrives on a separate CD-ROM instead, see domain.xml.j2."""
     host = next(h for h in base_config["hosts"] if h["os_family"] == "windows")
     script = jinja_env.get_template("ipxe/host-windows-install.ipxe.j2").render(
         **render_context.build_context(base_config, host=host)
@@ -343,6 +350,8 @@ def test_windows_install_script_fetches_the_wimboot_file_set(jinja_env, base_con
         assert required in script, f"{required} missing from the wimboot file set"
 
     assert "startnet.cmd" in script
-    assert "Autounattend.xml" in script, (
-        "the answer file travels through wimboot, not through the SMB share"
+
+    fetch_lines = [line for line in script.splitlines() if line.strip().startswith("imgfetch")]
+    assert not any("Autounattend.xml" in line for line in fetch_lines), (
+        "the answer file travels on a separate CD-ROM, not through wimboot injection"
     )

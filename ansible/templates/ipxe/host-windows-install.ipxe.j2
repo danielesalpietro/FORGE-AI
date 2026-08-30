@@ -5,8 +5,12 @@
 # Rendered from ansible/templates/ipxe/host-windows-install.ipxe.j2
 # =====================================================================
 # Flow: iPXE -> wimboot -> WinPE (boot.wim + BCD + boot.sdi)
-#       -> startnet.cmd -> Install-Windows.ps1
-#       -> setup.exe /unattend:Autounattend.xml
+#       -> startnet.cmd -> setup.exe
+# Autounattend.xml is NOT injected here: it arrives on a separate
+# CD-ROM (domain.xml.j2, windows_attach_unattend_cdrom), and Setup
+# finds it there through its own auto-detection. See bug 28/30 in
+# docs/logbook/06-fase6-provisioning-windows.md for why the earlier
+# wimboot-injection approach was dropped.
 #
 # wimboot is the iPXE project's Windows Imaging loader. Its licence and
 # attribution are recorded in THIRD_PARTY_NOTICES.md.
@@ -43,19 +47,11 @@ imgfetch --name boot.wim   ${winroot}/boot.wim             boot.wim   || goto fa
 # to --name (the trailing cmdline token is NOT what wimboot reads for
 # this -- confirmed on a real boot after only changing the trailing
 # token left the injected file named "Autounattend.xml" regardless).
-# That --name mechanism is how this host gets its own startnet.cmd and
-# its own answer file without ever writing them to a shared,
-# world-readable location on the KVM host and without needing an SMB
-# mount before the network is up.
+# That --name mechanism is how this host gets its own startnet.cmd
+# without ever writing it to a shared, world-readable location on the
+# KVM host and without needing an SMB mount before the network is up.
+# The answer file no longer travels this way -- see the header comment.
 imgfetch --name startnet.cmd     ${winroot}/startnet.cmd     startnet.cmd     || goto failed
-# Injected as forge-unattend.xml, not the conventional "Autounattend.xml":
-# bug 30 (docs/logbook/06-fase6-provisioning-windows.md) -- Windows Setup
-# auto-detects \Windows\System32\Autounattend.xml on its own, and having
-# a file there AND passing the same file via an explicit /unattend: flag
-# makes setup.exe exit instantly with errorlevel 5, confirmed by moving
-# the identical, byte-for-byte file to a different name and watching it
-# succeed. A non-conventional name sidesteps Setup's own auto-detection.
-imgfetch --name forge-unattend.xml ${winroot}/Autounattend.xml forge-unattend.xml || goto failed
 
 boot || goto failed
 

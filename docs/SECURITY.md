@@ -126,7 +126,7 @@ network.
 | Artefact | Carries | Mitigation |
 |---|---|---|
 | Ubuntu seed | A **crypt(3) hash** (yescrypt or SHA-512) | Never cleartext. The role asserts the hash format before rendering. Purged once the host reports `installed`. |
-| `Autounattend.xml` | Base64(UTF-16LE(password + field name)) | **Never written to the SMB share** — wimboot injects it straight into WinPE's `\Windows\System32`. Purged after install, with a `PURGED.txt` recording the window. |
+| `Autounattend.xml` | Base64(UTF-16LE(password + field name)) | **Never written to the SMB share, and never sent over the network at all** — delivered as a CD-ROM attached directly to the VM (built by `windows_unattend`, `genisoimage`). Purged after install (the disc is detached and its backing file deleted), with a `PURGED.txt` recording the window. |
 
 The Windows encoding is what Microsoft calls "encrypted" when
 `PlainText` is `false`. **It is reversible by anyone holding the file.**
@@ -139,10 +139,13 @@ is revoked the moment configuration management takes over. Windows LAPS
 for the local administrator.
 
 **Residual.** The exposure window is real: from render to installation
-complete, anything on the provisioning bridge can read
-`Autounattend.xml` and recover the administrator password. Setting
-`security.purge_answer_files_after_install: false` extends that window
-indefinitely.
+complete, the rendered file (and the CD-ROM image built from it) sit
+readable on the KVM host's own filesystem, and the encoded password can
+be recovered by anyone with access there. It no longer crosses the
+provisioning network at all -- Setup reads it from a directly-attached
+virtual CD-ROM rather than fetching it over the wire, unlike the rest
+of the boot chain. Setting `security.purge_answer_files_after_install:
+false` extends the window indefinitely.
 
 ---
 

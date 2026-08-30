@@ -23,6 +23,21 @@
   when: windows_unattend_purge | bool
   tags: [windows, security]
 
+- name: Remove the answer-file ISO for installed hosts
+  # The same content, same exposure window, delivered as a CD-ROM
+  # instead of over HTTP -- see domain.xml.j2 and
+  # windows_attach_unattend_cdrom. set-boot-order.yml already detaches
+  # the device from the domain; this removes the backing file itself.
+  ansible.builtin.file:
+    path: "{{ storage.libvirt_pool_path }}/{{ item }}-unattend.iso"
+    state: absent
+  become: true
+  loop: "{{ forge_installed_windows_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when: windows_unattend_purge | bool
+  tags: [windows, security]
+
 - name: Record that the answer file was purged
   ansible.builtin.copy:
     content: |

@@ -16,3 +16,9 @@ winrm_max_shells: 30
 windows_unattend_purge: "{{ security.purge_answer_files_after_install | default(true) }}"
 # Attach the VirtIO ISO as a CD-ROM as a fallback driver source.
 windows_attach_virtio_cdrom: false
+# Attach Autounattend.xml as a CD-ROM (built by this role) instead of
+# injecting it into WinPE via wimboot. set-boot-order.yml flips this to
+# false once the host reports "installed" -- the disc is no longer
+# needed and stops being attached, mirroring the HTTP-side purge in
+# purge.yml for the same file.
+windows_attach_unattend_cdrom: true

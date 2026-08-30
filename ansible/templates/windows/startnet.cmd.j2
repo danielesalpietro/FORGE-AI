@@ -102,8 +102,20 @@ echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
   echo attributes disk clear readonly
   echo clean
   echo convert gpt
+  echo rescan
 ) > X:\forge-diskpart.txt
 diskpart /s X:\forge-diskpart.txt >> "%FORGE_LOG%" 2>&1
+rem bug 32 (docs/logbook/06-fase6-provisioning-windows.md): setup.exe
+rem launched immediately after "clean"/"convert gpt" consistently failed
+rem with 0xC190011F, before ever writing setupact.log, while the exact
+rem same setup.exe invocation launched by hand minutes later on the
+rem same disk succeeded and reached the interactive GUI -- a race
+rem between diskpart's disk operations and Setup's own disk
+rem enumeration, not an answer-file problem (confirmed separately by
+rem testing with no answer file at all). "rescan" forces diskpart to
+rem re-enumerate synchronously before this script continues, so Setup
+rem never sees a disk mid-transition.
+timeout /t 5 /nobreak >nul
 
 rem -------------------------------------------------------------------
 rem 5. Announce that installation has started.
@@ -122,8 +134,16 @@ if exist "%SystemRoot%\System32\curl.exe" (
 
 rem -------------------------------------------------------------------
 rem 6. Hand over to Windows Setup.
-rem    /unattend makes Setup process the windowsPE, specialize and
-rem    oobeSystem passes from the injected answer file.
+rem    No /unattend: flag: Autounattend.xml arrives on a separate CD-ROM
+rem    (domain.xml.j2, windows_attach_unattend_cdrom), and Setup finds
+rem    it there through its own auto-detection. Two earlier approaches
+rem    were tried and dropped -- injecting the drivers/answer file into
+rem    the wrong boot.wim image (bug 28) and injecting the answer file
+rem    into WinPE's own System32 under a name chosen specifically to
+rem    dodge Setup's auto-detected path (bug 30) -- both caused by the
+rem    same underlying choice to deliver the file through wimboot
+rem    injection rather than a real removable medium. See
+rem    docs/logbook/06-fase6-provisioning-windows.md.
 rem    /noreboot is deliberately NOT used: Setup must reboot itself, and
 rem    the iPXE state service now answers "installed" for this MAC so
 rem    the next network boot falls through to the local disk.
@@ -132,16 +152,31 @@ echo [6/6] Starting Windows Setup (this takes 15-30 minutes)...
 echo [6/6] setup.exe >> "%FORGE_LOG%"
 copy /y "%FORGE_LOG%" %FORGE_SRC%\..\logs\%FORGE_HOST%-winpe.log >nul 2>&1
 
-rem Deliberately NOT X:\Windows\System32\Autounattend.xml -- Setup
-rem auto-detects that exact conventional path on its own, and a file
-rem there conflicts with the explicit /unattend flag below, making
-rem setup.exe exit instantly with errorlevel 5 (bug 30). wimboot injects
-rem the same answer file content under the name forge-unattend.xml
-rem specifically to avoid that auto-detected path.
-%FORGE_SRC%\setup.exe /unattend:X:\Windows\System32\forge-unattend.xml
+rem bug 32 (docs/logbook/06-fase6-provisioning-windows.md): the FIRST
+rem setup.exe launch right after diskpart's clean/convert gpt/rescan
+rem consistently returns control with errorlevel -1047527137
+rem (0xC190011F) before ever writing setupact.log -- confirmed on real
+rem hardware to be unrelated to the answer file (it happens identically
+rem with no answer file at all). Every subsequent launch on the exact
+rem same disk succeeds, regardless of how long is waited in between, so
+rem this is not a fixed settle time -- something about the first call
+rem itself, not yet understood, leaves the disk ready for the next one.
+rem A bounded retry is the pragmatic fix: if Setup actually succeeds it
+rem reboots the machine and none of this runs again anyway, so retrying
+rem unconditionally on any non-reboot return is safe.
+set FORGE_SETUP_TRIES=0
+:setup_retry
+set /a FORGE_SETUP_TRIES+=1
+%FORGE_SRC%\setup.exe
+set FORGE_SETUP_RC=%errorlevel%
+echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
+if %FORGE_SETUP_TRIES% lss 3 (
+  timeout /t 60 /nobreak >nul
+  goto :setup_retry
+)
 
 rem Setup normally reboots and never returns here.
-echo [error] setup.exe returned control with errorlevel %errorlevel%. >> "%FORGE_LOG%"
+echo [error] setup.exe returned control with errorlevel %FORGE_SETUP_RC% after %FORGE_SETUP_TRIES% attempts. >> "%FORGE_LOG%"
 goto :fail
 
 :fail

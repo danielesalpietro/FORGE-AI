@@ -73,6 +73,34 @@
   no_log: true
   tags: [windows, security]
 
+- name: Build the answer-file ISO for virtual media delivery  # noqa: no-handler
+  # Not a handler: the ISO must exist before vm_lifecycle defines/starts the domain later in the same play. Delivered as a
+  # CD-ROM (see domain.xml.j2, windows_attach_unattend_cdrom) instead of
+  # injected into WinPE via wimboot: bug 28 and bug 30
+  # (docs/logbook/06-fase6-provisioning-windows.md) were both caused by
+  # that injection path, and Windows Setup auto-detects an answer file
+  # at the root of an attached CD-ROM on its own, so this also drops
+  # the explicit /unattend: flag in startnet.cmd.j2 -- one less place
+  # for the injected path and the flag to disagree with each other.
+  ansible.builtin.command:
+    argv:
+      - genisoimage
+      - -quiet
+      - -o
+      - "{{ storage.libvirt_pool_path }}/{{ item.name }}-unattend.iso"
+      - -V
+      - UNATTEND
+      - -J
+      - -r
+      - "{{ storage.http_root }}/windows/{{ item.name }}/Autounattend.xml"
+  become: true
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+  no_log: true
+  tags: [windows, security]
+
 - name: Render SetupComplete.cmd
   ansible.builtin.template:
     src: "{{ forge_shared_templates_dir }}/windows/SetupComplete.cmd.j2"

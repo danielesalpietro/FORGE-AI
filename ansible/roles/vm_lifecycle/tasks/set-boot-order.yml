@@ -32,6 +32,13 @@
   vars:
     host: "{{ item }}"
     forge_boot_target: hd
+    # The answer-file CD-ROM (windows_unattend, domain.xml.j2) has no
+    # reason to stay attached to an installed host: it carries the
+    # administrator password in a reversible encoding, matching why
+    # windows_unattend/tasks/purge.yml stops serving the same file over
+    # HTTP at this same point. A no-op for Linux hosts, which never had
+    # the disk to begin with.
+    windows_attach_unattend_cdrom: false
   loop: "{{ forge_boot_order_hosts | default([]) }}"
   loop_control:
     label: "{{ item.name }}"

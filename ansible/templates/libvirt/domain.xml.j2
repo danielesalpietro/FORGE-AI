@@ -111,6 +111,27 @@
     </disk>
 {% endif %}
 
+{% if host.os_family == 'windows' and windows_attach_unattend_cdrom | default(true) %}
+    <!-- Autounattend.xml delivered as a CD-ROM, built by windows_unattend
+         (genisoimage). Windows Setup auto-detects an answer file at the
+         root of an attached CD-ROM on its own, so startnet.cmd launches
+         setup.exe with no /unattend: flag at all. Bug 28 and bug 30
+         (docs/logbook/06-fase6-provisioning-windows.md) were both caused
+         by the previous approach: injecting the file into WinPE itself
+         via wimboot. This sidesteps that whole path rather than
+         patching it again. set-boot-order.yml sets
+         windows_attach_unattend_cdrom=false once the host reports
+         "installed": the disc carries the administrator password in a
+         reversible encoding (see Autounattend.xml.j2) and has no reason
+         to stay attached past that point. -->
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="{{ storage.libvirt_pool_path }}/{{ host.name }}-unattend.iso"/>
+      <target dev="sdc" bus="sata"/>
+      <readonly/>
+    </disk>
+{% endif %}
+
     <controller type="usb" index="0" model="qemu-xhci" ports="8"/>
     <controller type="pci" index="0" model="pcie-root"/>
 {% for slot in range(1, 6) %}
