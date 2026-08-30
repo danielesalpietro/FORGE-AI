@@ -30,6 +30,10 @@ GLOBAL_TEMPLATES = [
     "nginx/boot-server.conf.j2",
     "libvirt/network.xml.j2",
     "semaphore/environment.json.j2",
+    # Renders without gathered facts: ansible_default_ipv4 is absent
+    # here by design, which is exactly what this coverage guards --
+    # the template must fall back cleanly instead of raising.
+    "motd/50-forge-ai.j2",
 ]
 
 # Templates rendered once per host, and which os_family they apply to.
