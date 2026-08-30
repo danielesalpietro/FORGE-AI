@@ -252,8 +252,20 @@ chain --autofree {BOOT_BASE_URL}/boot/menu.ipxe || exit 1
 """
 
 
-def dispatch(mac: str) -> tuple[int, str]:
-    """Decide what this MAC should boot, and record the decision."""
+def dispatch(mac: str, probe: bool = False) -> tuple[int, str]:
+    """Decide what this MAC should boot, and record the decision.
+
+    With ``probe=True`` the same decision is computed but NOTHING is
+    recorded: no attempt increment, no history, no state transition.
+    This exists for the deployment-time validation fetch in
+    ansible/roles/ipxe_menu (bug 34,
+    docs/logbook/07-project-review.md): that fetch used to count as a
+    real dispatch, silently burning one install attempt on every
+    deployment since the beginning -- and, once the Windows
+    mid-install-reboot policy (bug 33) landed, misclassifying the VM's
+    genuine first boot as a mid-install reboot, which sent it to an
+    empty local disk.
+    """
     registry = load_registry()
     host = registry.get(mac)
 
@@ -265,6 +277,8 @@ def dispatch(mac: str) -> tuple[int, str]:
             record["profile"] = host.get("profile")
 
         if not host:
+            if probe:
+                return HTTPStatus.OK, script_unknown(mac)
             LOG.warning("dispatch for unknown MAC %s", mac)
             record.setdefault("history", []).append(
                 {"at": now_iso(), "event": "dispatch-unknown-mac", "source": "ipxe"}
@@ -275,11 +289,23 @@ def dispatch(mac: str) -> tuple[int, str]:
         state = record.get("state", "new")
 
         if state not in INSTALLING_STATES:
+            if probe:
+                return HTTPStatus.OK, script_local(host, record, f"state={state}, no installation required")
             record.setdefault("history", []).append(
                 {"at": now_iso(), "event": "dispatch-local", "source": "ipxe", "detail": state}
             )
             write_state(record)
             return HTTPStatus.OK, script_local(host, record, f"state={state}, no installation required")
+
+        if probe:
+            # Everything below mutates the record; a probe only needs
+            # the script that WOULD be served right now.
+            if record.get("attempts", 0) >= MAX_ATTEMPTS:
+                return HTTPStatus.OK, script_local(
+                    host, record,
+                    f"install attempt limit ({MAX_ATTEMPTS}) reached - refusing to reinstall",
+                )
+            return HTTPStatus.OK, script_install(host, record)
 
         if (
             host.get("os_family") == "windows"
@@ -425,7 +451,10 @@ class Handler(BaseHTTPRequestHandler):
             if not MAC_HYPHEN_RE.match(mac):
                 self._send(HTTPStatus.BAD_REQUEST, b"#!ipxe\necho malformed MAC\nexit 1\n")
                 return
-            status, script = dispatch(mac)
+            # ?probe=1 previews the decision without recording it --
+            # used by the deployment-time validation (bug 34).
+            probe = "probe=1" in (urlparse(self.path).query or "")
+            status, script = dispatch(mac, probe=probe)
             self._send(status, script.encode("utf-8"))
             return
 

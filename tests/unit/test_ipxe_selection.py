@@ -144,6 +144,27 @@ def test_the_installer_stops_being_offered_at_the_limit(state_service, ubuntu_ma
     assert "refusing to reinstall" in script
 
 
+def test_probe_dispatch_records_nothing(state_service, ubuntu_mac, windows_mac):
+    """Bug 34: the deployment-time validation fetch used to count as a
+    real dispatch -- it burned one install attempt on every deployment,
+    and combined with the Windows mid-install policy it sent the VM's
+    genuine first boot to an empty local disk. probe=True must return
+    the same script with zero side effects."""
+    for mac in (ubuntu_mac, windows_mac):
+        _, script = state_service.dispatch(mac, probe=True)
+        assert "install.ipxe" in script
+
+        record = state_service.read_state(mac)
+        assert record.get("state", "new") == "new", "a probe must not transition state"
+        assert record.get("attempts", 0) == 0, "a probe must not burn an attempt"
+
+    # And after a real dispatch, a probe must not consume a Windows
+    # mid-install local boot either.
+    state_service.dispatch(windows_mac)
+    state_service.dispatch(windows_mac, probe=True)
+    assert state_service.read_state(windows_mac).get("install_local_boots", 0) == 0
+
+
 def test_windows_mid_install_reboot_boots_local(state_service, windows_mac):
     """Bug 33: Windows Setup reboots mid-install and only reports
     "installed" from the specialize pass, after its first boot from

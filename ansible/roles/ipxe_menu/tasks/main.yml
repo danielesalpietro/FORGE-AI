@@ -151,8 +151,15 @@
 # Prove the dispatch path end to end
 # ---------------------------------------------------------------------
 - name: Fetch the dispatch script the state service would serve
+  # ?probe=1 is essential, not cosmetic (bug 34,
+  # docs/logbook/07-project-review.md): without it this validation
+  # fetch counted as a REAL dispatch -- it moved new->installing and
+  # burned one install attempt on every deployment since the
+  # beginning, and once the Windows mid-install-reboot policy landed
+  # (bug 33) it made the VM's genuine first boot look like a
+  # mid-install reboot, sending it to an empty local disk.
   ansible.builtin.uri:
-    url: "{{ forge_boot_base_url }}/state/{{ item.mac_address | mac_hyphen }}.ipxe"
+    url: "{{ forge_boot_base_url }}/state/{{ item.mac_address | mac_hyphen }}.ipxe?probe=1"
     method: GET
     return_content: true
     status_code: [200]
