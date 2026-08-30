@@ -450,3 +450,28 @@ Scoperte ulteriori del run, già fixate per i futuri:
 Stato finale: `configuring` (il passaggio a `ready` appartiene alla
 fase di configurazione/baseline, issue #9 — non a questo gate).
 **Il gate del PoC Windows è verde.**
+
+## 2026-08-30 — GPU fisica installata; forge-poc-host rinasce con GTX 1060 in passthrough + nested virt
+
+Daniele ha spento tutto (VM annidate spente via ACPI, poi le tre VM
+accese su ESXi via guest shutdown — tutte verificate Powered off),
+installato una GTX 1060 6GB nel server fisico, e ricreato/riacceso la
+VM `forge-poc-host` (hostname interno `claude-code-test2`,
+192.168.1.96): Ubuntu 24.04.4, 8 vCPU con vmx, 31 GB RAM, kvm-ok
+verde, driver NVIDIA 580.173.02 + CUDA 13.0 già attivi (`nvidia-smi`
+ok), sda 60 GB (29 liberi nel VG) + sdb 400 GB vergine.
+
+**Scoperta da checklist**: la webGUI ESXi blocca la combinazione
+nested-virt + PCI passthrough; serve il `.vmx` a mano. Chiavi lette
+dal file reale funzionante (`vhv.enable`, `vhv.allowPassthru` — la
+chiave che sblocca la coesistenza —, `pciPassthru.use64bitMMIO`,
+`pciPassthru.64bitMMIOSizeGB=6` ≥ VRAM; entrambe le funzioni PCI
+della GPU passate: VGA 0x1c03 + audio 0x10f1). Documentato in
+docs/ESXI-OUTER-VM-CHECKLIST.md, sezione dedicata. Nota: gli appunti
+a mano dicevano 16 GB di MMIO, il file reale ne ha 6 — registrati
+entrambi, col 6 come "verificato funzionante" e il ≥VRAM/16 come
+scelta prudente.
+
+Nel frattempo, release v0.1.0 pubblicata (tag + GitHub Release), PR
+#30 aperta verso develop, README aggiornato con stato validato e
+roadmap collegata alle issue.

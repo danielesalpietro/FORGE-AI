@@ -82,6 +82,31 @@ controllo mirato sui punti che hanno già causato perdite di tempo.
       `vim-cmd vmsvc/reload` su una VM accesa: in questa sessione ha
       silenziosamente scartato un dispositivo appena aggiunto.
 
+## Virtualizzazione nidificata + GPU passthrough insieme (`.vmx` a mano)
+
+La webGUI di ESXi **blocca** la combinazione VHV (nested virt) + PCI
+passthrough: la configurazione va fatta a mano nel `.vmx` (VM spenta,
+poi verifica col grep come sopra). Fatto con successo il 2026-08-30 su
+`forge-poc-host` (GTX 1060 6GB + kvm-ok verde nella guest); questi
+sono i valori **letti dal file reale** funzionante:
+
+- [ ] `vhv.enable = "TRUE"` — virtualizzazione nidificata
+      (`kvm-ok` verde nella guest).
+- [ ] `vhv.allowPassthru = "TRUE"` — **la chiave che sblocca la
+      coesistenza** di VHV e passthrough; senza, la webGUI rifiuta la
+      configurazione.
+- [ ] `pciPassthru.use64bitMMIO = "TRUE"` — indirizzamento MMIO a 64
+      bit per i BAR della GPU.
+- [ ] `pciPassthru.64bitMMIOSizeGB = "6"` — dimensionare **almeno pari
+      alla VRAM** della GPU (6 verificato funzionante con la GP106 da
+      6 GB; un valore più alto, es. 16, è la scelta prudente se la RAM
+      MMIO non scarseggia).
+- [ ] I device passthrough veri e propri (`pciPassthru0.*` con
+      `id`/`deviceId`/`vendorId`/`systemId`/`present`) si possono far
+      generare alla webGUI *prima* di aggiungere a mano le chiavi
+      vhv/MMIO; per la GTX 1060 vanno passate **entrambe le funzioni**
+      (VGA `0x1c03` e audio `0x10f1`).
+
 ## File `user-data` (autoinstall)
 
 - [ ] **Non riusare il dump letterale** di
