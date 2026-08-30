@@ -17,6 +17,8 @@ set FORGE_MAC={{ host.mac_address | replace(':', '-') }}
 set FORGE_BOOT={{ forge_boot_base_url }}
 set FORGE_SHARE=\\{{ provisioning_network.gateway }}\{{ windows_media_share_name | default('winmedia') }}
 set FORGE_SRC=I:
+set FORGE_VIRTIO_SHARE=\\{{ provisioning_network.gateway }}\{{ virtio_media_share_name | default('virtio') }}
+set FORGE_DRV=J:
 set FORGE_LOG=X:\forge-ai.log
 
 echo ================================================================= > "%FORGE_LOG%"
@@ -76,6 +78,22 @@ if not exist "%FORGE_SRC%\sources\install.wim" (
     echo         docs/TROUBLESHOOTING.md -^> "Windows Setup cannot retrieve installation files" >> "%FORGE_LOG%"
     goto :fail
   )
+)
+
+rem The virtio share carries the flat driver folder handed to setup.exe
+rem via /InstallDrivers below. Mapped to a drive letter so Setup sees a
+rem local-style path, sidestepping the UNC handling that broke the old
+rem answer-file DriverPaths route (bug 32).
+echo       Mounting %FORGE_VIRTIO_SHARE%... & echo       net use virtio >> "%FORGE_LOG%"
+net use %FORGE_DRV% "%FORGE_VIRTIO_SHARE%" /persistent:no >> "%FORGE_LOG%" 2>&1
+if errorlevel 1 (
+  net use %FORGE_DRV% "%FORGE_VIRTIO_SHARE%" /user:guest "" /persistent:no >> "%FORGE_LOG%" 2>&1
+)
+if not exist "%FORGE_DRV%\forge-install-drivers\*.inf" (
+  echo [error] Flat driver folder not reachable at %FORGE_VIRTIO_SHARE%\forge-install-drivers. >> "%FORGE_LOG%"
+  echo         Without it the installed OS gets no VirtIO storage or network driver. >> "%FORGE_LOG%"
+  echo         Rebuild with: make prepare-windows-media >> "%FORGE_LOG%"
+  goto :fail
 )
 
 rem -------------------------------------------------------------------
@@ -173,10 +191,16 @@ rem sources\setup.exe directly, not the stub at the media root: the
 rem stub swallows both the error dialog and the Panther logs (bug 32's
 rem diagnosis was blind for days until the direct binary produced
 rem setuperr.log on the first try). Same choice MDT makes.
+rem /InstallDrivers (WinPE-supported since 24H2) carries the VirtIO
+rem drivers into the installed OS; it replaces the answer file's
+rem DriverPaths block, which this setup engine rejects at parse time
+rem (bug 32). Without it the installed OS would have no NetKVM, the
+rem specialize-pass downloads would fail, and the pipeline would stall
+rem right after an apparently successful install.
 set FORGE_SETUP_TRIES=0
 :setup_retry
 set /a FORGE_SETUP_TRIES+=1
-%FORGE_SRC%\sources\setup.exe
+%FORGE_SRC%\sources\setup.exe /InstallDrivers %FORGE_DRV%\forge-install-drivers
 set FORGE_SETUP_RC=%errorlevel%
 echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
 if %FORGE_SETUP_TRIES% lss 3 (

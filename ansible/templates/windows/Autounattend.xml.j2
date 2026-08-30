@@ -42,22 +42,17 @@
       <UserLocale>{{ windows_user_locale | default('en-US') }}</UserLocale>
     </component>
 
-    <!-- VirtIO storage/network drivers offered to Setup. The paths are
-         relative to the SMB export of the extracted VirtIO ISO. -->
-    <component name="Microsoft-Windows-PnpCustomizationsWinPE"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral"
-               versionScope="nonSxS">
-      <DriverPaths>
-{% for driver_path in media.windows.virtio.driver_paths %}
-        <PathAndCredentials wcm:action="add" wcm:keyValue="{{ '%02d' | format(loop.index) }}"
-                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Path>\\{{ provisioning_network.gateway }}\{{ virtio_media_share_name | default('virtio') }}\{{ driver_path | replace('/', '\\') }}</Path>
-        </PathAndCredentials>
-{% endfor %}
-      </DriverPaths>
-    </component>
+    <!-- No Microsoft-Windows-PnpCustomizationsWinPE / DriverPaths block
+         here, deliberately: this build's setup engine (Server 2025,
+         26100.32230) rejects the PathAndCredentials list items outright
+         at parse time (CSI E_INVALIDARG, "name in handler = 0",
+         setuperr.log) and aborts the whole windowsPE pass -- bug 32,
+         docs/logbook/06-fase6-provisioning-windows.md. The VirtIO
+         drivers reach the installed OS through setup.exe's
+         /InstallDrivers command-line option instead (supported from
+         WinPE since 24H2), passed by startnet.cmd.j2 against the flat
+         driver folder that windows_media stages into the virtio SMB
+         export. -->
 
     <component name="Microsoft-Windows-Setup"
                processorArchitecture="amd64"
