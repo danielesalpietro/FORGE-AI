@@ -51,7 +51,11 @@ imgfetch --name boot.wim   ${winroot}/boot.wim             boot.wim   || goto fa
 # without ever writing it to a shared, world-readable location on the
 # KVM host and without needing an SMB mount before the network is up.
 # The answer file no longer travels this way -- see the header comment.
+# winpeshl.ini is what makes the Setup image run startnet.cmd at all:
+# without it, winpeshl.exe launches X:\sources\setup.exe directly and
+# the whole orchestration is skipped (bugs 28/32 in the logbook).
 imgfetch --name startnet.cmd     ${winroot}/startnet.cmd     startnet.cmd     || goto failed
+imgfetch --name winpeshl.ini     ${winroot}/winpeshl.ini     winpeshl.ini     || goto failed
 
 boot || goto failed
 

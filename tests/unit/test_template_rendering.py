@@ -30,6 +30,10 @@ GLOBAL_TEMPLATES = [
     "nginx/boot-server.conf.j2",
     "libvirt/network.xml.j2",
     "semaphore/environment.json.j2",
+    # Renders without gathered facts: ansible_default_ipv4 is absent
+    # here by design, which is exactly what this coverage guards --
+    # the template must fall back cleanly instead of raising.
+    "motd/50-forge-ai.j2",
 ]
 
 # Templates rendered once per host, and which os_family they apply to.
@@ -39,9 +43,11 @@ PER_HOST_TEMPLATES = [
     ("ubuntu/vendor-data.j2", "linux"),
     ("ipxe/host-ubuntu-install.ipxe.j2", "linux"),
     ("windows/Autounattend.xml.j2", "windows"),
+    ("windows/specialize.cmd.j2", "windows"),
     ("windows/SetupComplete.cmd.j2", "windows"),
     ("windows/Configure-WinRM.ps1.j2", "windows"),
     ("windows/startnet.cmd.j2", "windows"),
+    ("windows/winpeshl.ini.j2", "windows"),
     ("ipxe/host-windows-install.ipxe.j2", "windows"),
 ]
 

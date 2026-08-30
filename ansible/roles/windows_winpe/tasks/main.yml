@@ -223,11 +223,31 @@
     label: "{{ item.name }}"
   tags: [windows]
 
+- name: Render the per-host winpeshl.ini
+  # Injected by wimboot next to startnet.cmd. This is what makes
+  # startnet.cmd actually run inside the Setup image, whose winpeshl
+  # default would otherwise launch X:\sources\setup.exe directly --
+  # bugs 28/32, see the header of windows/winpeshl.ini.j2.
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/windows/winpeshl.ini.j2"
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/winpeshl.ini"
+    owner: root
+    group: root
+    mode: "0644"
+    newline_sequence: "\r\n"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows]
+
 - name: Confirm every host has a complete WinPE file set
   ansible.builtin.stat:
     path: "{{ storage.http_root }}/windows/{{ item.0.name }}/{{ item.1 }}"
   become: true
-  loop: "{{ forge_windows_hosts | product(['bootmgr.exe', 'BCD', 'boot.sdi', 'boot.wim', 'startnet.cmd']) | list }}"
+  loop: "{{ forge_windows_hosts | product(['bootmgr.exe', 'BCD', 'boot.sdi', 'boot.wim', 'startnet.cmd', 'winpeshl.ini']) | list }}"
   loop_control:
     label: "{{ item.0.name }}/{{ item.1 }}"
   register: forge_winpe_complete

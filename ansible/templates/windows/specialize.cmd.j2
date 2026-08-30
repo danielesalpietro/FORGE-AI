@@ -1,0 +1,76 @@
+@echo off
+rem =====================================================================
+rem FORGE-AI :: specialize-pass bootstrap for {{ host.name }}
+rem Downloaded to C:\Windows\Temp\forge-sp.cmd and run, as SYSTEM, by
+rem the single RunSynchronousCommand in Autounattend.xml (specialize
+rem pass). Carries the work that used to live in three inline commands
+rem there: bug 37, the SMI validator rejects RunSynchronousCommand
+rem Path values over ~200 characters, so the answer file keeps a short
+rem wrapper and the logic lives here.
+rem Rendered from ansible/templates/windows/specialize.cmd.j2
+rem =====================================================================
+rem Deployment : {{ forge_deployment_id | default('manual') }}
+rem Commit     : {{ forge_git_commit | default('unknown') }}
+rem
+rem FAILURE MODE: if this script never runs (download failed, network
+rem not up yet), the installation still completes but SetupComplete.cmd
+rem is never staged: no WinRM listener, no "installed" callback, and
+rem the provisioning playbook times out pointing here. The log below is
+rem shipped to the boot server precisely so that case is diagnosable.
+
+setlocal enableextensions
+set FORGE_DIR=C:\ProgramData\forge-ai
+set FORGE_LOG=%FORGE_DIR%\specialize.log
+set FORGE_SCRIPTS=C:\Windows\Setup\Scripts
+set FORGE_MAC={{ host.mac_address | replace(':', '-') }}
+set FORGE_BOOT={{ forge_boot_base_url }}
+
+if not exist "%FORGE_DIR%" md "%FORGE_DIR%"
+if not exist "%FORGE_SCRIPTS%" md "%FORGE_SCRIPTS%"
+echo [%DATE% %TIME%] FORGE-AI specialize starting on %COMPUTERNAME% > "%FORGE_LOG%"
+
+rem -------------------------------------------------------------------
+rem 1. Stage the post-install scripts. curl.exe ships in the installed
+rem    OS from Server 2019 onwards; this PoC targets Server 2025.
+rem -------------------------------------------------------------------
+for %%F in (SetupComplete.cmd Configure-WinRM.ps1) do (
+  echo [%TIME%] downloading %%F >> "%FORGE_LOG%"
+  curl.exe --silent --show-error --retry 5 --retry-delay 5 --max-time 120 ^
+    -o "%FORGE_SCRIPTS%\%%F" "%FORGE_BOOT%/windows/{{ host.name }}/%%F" >> "%FORGE_LOG%" 2>&1
+  if errorlevel 1 (
+    echo [%TIME%] download of %%F FAILED >> "%FORGE_LOG%"
+  ) else (
+    echo [%TIME%] %%F staged >> "%FORGE_LOG%"
+  )
+)
+
+rem -------------------------------------------------------------------
+rem 2. Report state=installed so the state service stops treating the
+rem    next PXE contact as a mid-install reboot.
+rem -------------------------------------------------------------------
+echo [%TIME%] reporting state=installed >> "%FORGE_LOG%"
+curl.exe --silent --show-error --max-time 30 --retry 3 --retry-delay 5 ^
+  -X POST -H "Content-Type: application/json" ^
+{% if forge_state_token | default('') | length > 0 %}
+  -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
+  -d "{\"state\":\"installed\",\"source\":\"windows-specialize\",\"host\":\"{{ host.name }}\"}" ^
+  "%FORGE_BOOT%/api/state/%FORGE_MAC%" >> "%FORGE_LOG%" 2>&1
+
+rem -------------------------------------------------------------------
+rem 3. Ship this log to the boot server so a failed specialize run is
+rem    diagnosable without console access to the VM.
+rem -------------------------------------------------------------------
+rem The token header is not optional decoration: every POST route in the
+rem state service is authenticated, and the upload silently 401s without
+rem it (bug 42, docs/logbook/07-project-review.md).
+curl.exe --silent --max-time 60 -X POST --data-binary "@%FORGE_LOG%" ^
+  -H "Content-Type: text/plain" ^
+{% if forge_state_token | default('') | length > 0 %}
+  -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
+  "%FORGE_BOOT%/api/log/{{ host.name }}/specialize.log" >nul 2>&1
+
+echo [%DATE% %TIME%] FORGE-AI specialize finished >> "%FORGE_LOG%"
+endlocal
+exit /b 0

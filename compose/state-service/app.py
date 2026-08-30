@@ -71,6 +71,26 @@ LISTEN_HOST = os.environ.get("FORGE_LISTEN_HOST", "0.0.0.0")  # noqa: S104 - con
 LISTEN_PORT = int(os.environ.get("FORGE_LISTEN_PORT", "8090"))
 BOOT_BASE_URL = os.environ.get("FORGE_BOOT_BASE_URL", "http://192.168.250.1:8080")
 MAX_ATTEMPTS = int(os.environ.get("FORGE_MAX_INSTALL_ATTEMPTS", "3"))
+# How many PXE boots a Windows host may make DURING an installation
+# before the state service concludes the install is dead and retries.
+# Windows Setup reboots mid-install (sometimes more than once) and only
+# reports "installed" from the specialize pass, which runs after the
+# first boot from disk -- so a PXE boot while "installing" is the
+# EXPECTED continuation for Windows, not a failure. See bug 33 in
+# docs/logbook/07-project-review.md: without this, the dispatch
+# re-served the installer at that reboot and wiped the half-written
+# disk on every attempt.
+# 8, not 3: one physical reboot can consume MORE than one dispatch --
+# observed live (2026-08-30): after `exit 1` the firmware ran the PXEv4
+# option's iPXE twice before walking on, so a single mid-install reboot
+# moved the counter by 2. Windows Server restarts 2-3 times during the
+# offline phase; with a limit of 3 the second dispatch of the second
+# reboot would already fall through and re-serve the INSTALLER onto a
+# nearly-complete disk. 8 gives ~4 double-dispatch reboots of headroom
+# while still bounding a genuinely dead install.
+WINDOWS_MID_INSTALL_LOCAL_BOOTS = int(
+    os.environ.get("FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS", "8")
+)
 SHARED_TOKEN = os.environ.get("FORGE_STATE_TOKEN", "").strip()
 MAX_BODY_BYTES = int(os.environ.get("FORGE_MAX_BODY_BYTES", str(32 * 1024 * 1024)))
 
@@ -183,6 +203,7 @@ def transition(record: dict, new_state: str, *, source: str, detail: str = "") -
     record["history"] = record["history"][-50:]
     if new_state == "new":
         record["attempts"] = 0
+        record["install_local_boots"] = 0
     return True, "ok"
 
 
@@ -215,16 +236,23 @@ def script_local(host: dict | None, record: dict, reason: str) -> str:
     # `sanboot --drive 0x80` is a BIOS/legacy INT13 trick; these guests are
     # UEFI, and iPXE reports "No such device" for it there ("Boot from SAN
     # device 0x80 failed: No such device", confirmed on real hardware via
-    # `virsh screenshot`). Plain `exit` returns control to firmware, which
-    # then proceeds to the domain's own next boot option (hd) -- the
-    # standard iPXE technique for UEFI local-disk fallback.
+    # `virsh screenshot`). The exit status matters just as much (bug 36,
+    # docs/logbook/07-project-review.md): a plain `exit` returns
+    # EFI_SUCCESS, EDK2's BdsDxe takes that as "this boot option
+    # succeeded", stops walking the boot order, and drops to the firmware
+    # menu -- observed twice on mid-install reboots with a perfectly
+    # valid Windows Boot Manager entry sitting right after the network
+    # entries. `exit 1` returns an error status, which is what makes the
+    # firmware proceed to the next boot option (hd): the documented iPXE
+    # technique for UEFI local-disk fallback
+    # (github.com/ipxe/ipxe/discussions/789).
     return f"""#!ipxe
 # FORGE-AI state service: local boot
 echo
 echo [state] {name}: {reason}
 echo [state] booting from local disk
 echo
-exit
+exit 1
 """
 
 
@@ -239,8 +267,20 @@ chain --autofree {BOOT_BASE_URL}/boot/menu.ipxe || exit 1
 """
 
 
-def dispatch(mac: str) -> tuple[int, str]:
-    """Decide what this MAC should boot, and record the decision."""
+def dispatch(mac: str, probe: bool = False) -> tuple[int, str]:
+    """Decide what this MAC should boot, and record the decision.
+
+    With ``probe=True`` the same decision is computed but NOTHING is
+    recorded: no attempt increment, no history, no state transition.
+    This exists for the deployment-time validation fetch in
+    ansible/roles/ipxe_menu (bug 34,
+    docs/logbook/07-project-review.md): that fetch used to count as a
+    real dispatch, silently burning one install attempt on every
+    deployment since the beginning -- and, once the Windows
+    mid-install-reboot policy (bug 33) landed, misclassifying the VM's
+    genuine first boot as a mid-install reboot, which sent it to an
+    empty local disk.
+    """
     registry = load_registry()
     host = registry.get(mac)
 
@@ -252,6 +292,8 @@ def dispatch(mac: str) -> tuple[int, str]:
             record["profile"] = host.get("profile")
 
         if not host:
+            if probe:
+                return HTTPStatus.OK, script_unknown(mac)
             LOG.warning("dispatch for unknown MAC %s", mac)
             record.setdefault("history", []).append(
                 {"at": now_iso(), "event": "dispatch-unknown-mac", "source": "ipxe"}
@@ -262,11 +304,55 @@ def dispatch(mac: str) -> tuple[int, str]:
         state = record.get("state", "new")
 
         if state not in INSTALLING_STATES:
+            if probe:
+                return HTTPStatus.OK, script_local(host, record, f"state={state}, no installation required")
             record.setdefault("history", []).append(
                 {"at": now_iso(), "event": "dispatch-local", "source": "ipxe", "detail": state}
             )
             write_state(record)
             return HTTPStatus.OK, script_local(host, record, f"state={state}, no installation required")
+
+        if probe:
+            # Everything below mutates the record; a probe only needs
+            # the script that WOULD be served right now.
+            if record.get("attempts", 0) >= MAX_ATTEMPTS:
+                return HTTPStatus.OK, script_local(
+                    host, record,
+                    f"install attempt limit ({MAX_ATTEMPTS}) reached - refusing to reinstall",
+                )
+            return HTTPStatus.OK, script_install(host, record)
+
+        if (
+            host.get("os_family") == "windows"
+            and state == "installing"
+            and record.get("attempts", 0) >= 1
+        ):
+            # Bug 33: Windows Setup reboots mid-install and only reports
+            # "installed" from the specialize pass, AFTER its first boot
+            # from disk. A PXE boot in this window is the expected
+            # continuation -- re-serving the installer here wipes the
+            # half-written disk. Boot local instead, bounded so a
+            # genuinely dead install still falls through to the retry
+            # (or the attempt-limit park) below. Checked BEFORE the
+            # attempt-limit guard: the last allowed attempt's own
+            # mid-install reboot must still boot local.
+            local_boots = record.get("install_local_boots", 0)
+            if local_boots < WINDOWS_MID_INSTALL_LOCAL_BOOTS:
+                record["install_local_boots"] = local_boots + 1
+                record.setdefault("history", []).append(
+                    {"at": now_iso(), "event": "dispatch-local-mid-install",
+                     "source": "ipxe",
+                     "detail": (f"mid-install reboot "
+                                f"{local_boots + 1}/{WINDOWS_MID_INSTALL_LOCAL_BOOTS}")}
+                )
+                record["updated_at"] = now_iso()
+                write_state(record)
+                LOG.info("%s mid-install reboot %d/%d: booting local",
+                         host["name"], local_boots + 1, WINDOWS_MID_INSTALL_LOCAL_BOOTS)
+                return HTTPStatus.OK, script_local(
+                    host, record, "mid-install reboot, continuing from local disk",
+                )
+            record["install_local_boots"] = 0
 
         if record.get("attempts", 0) >= MAX_ATTEMPTS:
             # Loop guard. Park the host instead of reinstalling forever.
@@ -380,7 +466,10 @@ class Handler(BaseHTTPRequestHandler):
             if not MAC_HYPHEN_RE.match(mac):
                 self._send(HTTPStatus.BAD_REQUEST, b"#!ipxe\necho malformed MAC\nexit 1\n")
                 return
-            status, script = dispatch(mac)
+            # ?probe=1 previews the decision without recording it --
+            # used by the deployment-time validation (bug 34).
+            probe = "probe=1" in (urlparse(self.path).query or "")
+            status, script = dispatch(mac, probe=probe)
             self._send(status, script.encode("utf-8"))
             return
 

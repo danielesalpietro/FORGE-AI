@@ -76,12 +76,14 @@ chain --autofree ${menu-url} || goto localboot
 :localboot
 # `sanboot --drive 0x80` is a BIOS/legacy INT13 trick; these guests are
 # UEFI, and iPXE reports "No such device" for it here (bug 22, confirmed
-# on real hardware via `virsh screenshot`). Plain `exit` returns control
-# to firmware, which then proceeds to the domain's own next boot option
-# (hd) -- the same fix applied to menu.ipxe.j2 and state-service's
-# script_local().
+# on real hardware via `virsh screenshot`). The exit STATUS matters too
+# (bug 36): a plain `exit` returns EFI_SUCCESS, the firmware takes that
+# as "this boot option succeeded" and stops walking the boot order at
+# the firmware menu; `exit 1` returns an error, which is what makes
+# BdsDxe proceed to the next boot option (hd). Same fix applied to
+# menu.ipxe.j2 and state-service's script_local().
 echo Booting from local disk...
-exit
+exit 1
 
 :shell
 echo

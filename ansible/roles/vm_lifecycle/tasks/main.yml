@@ -39,6 +39,11 @@
 - name: Check for an existing disk image
   ansible.builtin.stat:
     path: "{{ storage.libvirt_pool_path }}/{{ item.name }}.qcow2"
+    # Existence is all this needs. Without this, stat SHA1-hashes the
+    # whole multi-GB qcow2 by default -- observed as an apparent 6+
+    # minute "hang" of this task after a half-completed install had
+    # grown the image (2026-08-30, docs/logbook/07-project-review.md).
+    get_checksum: false
   become: true
   loop: "{{ forge_hosts }}"
   loop_control:

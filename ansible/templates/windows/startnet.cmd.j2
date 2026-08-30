@@ -17,6 +17,8 @@ set FORGE_MAC={{ host.mac_address | replace(':', '-') }}
 set FORGE_BOOT={{ forge_boot_base_url }}
 set FORGE_SHARE=\\{{ provisioning_network.gateway }}\{{ windows_media_share_name | default('winmedia') }}
 set FORGE_SRC=I:
+set FORGE_VIRTIO_SHARE=\\{{ provisioning_network.gateway }}\{{ virtio_media_share_name | default('virtio') }}
+set FORGE_DRV=J:
 set FORGE_LOG=X:\forge-ai.log
 
 echo ================================================================= > "%FORGE_LOG%"
@@ -64,19 +66,54 @@ rem    Primary: read-only SMB export of the extracted Windows ISO.
 rem    WinPE's net.exe is guaranteed present; curl.exe is not, which is
 rem    why SMB and not HTTP carries the multi-gigabyte install.wim.
 rem -------------------------------------------------------------------
+rem The share can answer "System error 53" for a while right after the
+rem samba container was restarted or a previous guest vanished
+rem mid-session (bug 41, docs/logbook/07-project-review.md: observed
+rem live while the host-side smbclient listed the same share without
+rem complaint). One immediate retry is not enough; a paced loop is.
 echo [3/6] Mounting %FORGE_SHARE%... & echo [3/6] net use >> "%FORGE_LOG%"
+set FORGE_SMB_TRIES=0
+:smb_retry
+set /a FORGE_SMB_TRIES+=1
 net use %FORGE_SRC% "%FORGE_SHARE%" /persistent:no >> "%FORGE_LOG%" 2>&1
 if errorlevel 1 (
   echo       retrying with explicit guest credentials... >> "%FORGE_LOG%"
   net use %FORGE_SRC% "%FORGE_SHARE%" /user:guest "" /persistent:no >> "%FORGE_LOG%" 2>&1
 )
-if not exist "%FORGE_SRC%\sources\install.wim" (
-  if not exist "%FORGE_SRC%\sources\install.esd" (
-    echo [error] Installation source not reachable at %FORGE_SHARE%. >> "%FORGE_LOG%"
-    echo         docs/TROUBLESHOOTING.md -^> "Windows Setup cannot retrieve installation files" >> "%FORGE_LOG%"
-    goto :fail
-  )
+if exist "%FORGE_SRC%\sources\install.wim" goto :smb_ok
+if exist "%FORGE_SRC%\sources\install.esd" goto :smb_ok
+echo       attempt %FORGE_SMB_TRIES%: %FORGE_SHARE% not reachable yet >> "%FORGE_LOG%"
+if %FORGE_SMB_TRIES% lss 6 (
+  ping -n 11 127.0.0.1 >nul
+  goto :smb_retry
 )
+echo [error] Installation source not reachable at %FORGE_SHARE% after %FORGE_SMB_TRIES% attempts. >> "%FORGE_LOG%"
+echo         docs/TROUBLESHOOTING.md -^> "Windows Setup cannot retrieve installation files" >> "%FORGE_LOG%"
+goto :fail
+:smb_ok
+
+rem The virtio share carries the flat driver folder handed to setup.exe
+rem via /InstallDrivers below. Mapped to a drive letter so Setup sees a
+rem local-style path, sidestepping the UNC handling that broke the old
+rem answer-file DriverPaths route (bug 32).
+echo       Mounting %FORGE_VIRTIO_SHARE%... & echo       net use virtio >> "%FORGE_LOG%"
+set FORGE_DRV_TRIES=0
+:drv_retry
+set /a FORGE_DRV_TRIES+=1
+net use %FORGE_DRV% "%FORGE_VIRTIO_SHARE%" /persistent:no >> "%FORGE_LOG%" 2>&1
+if errorlevel 1 (
+  net use %FORGE_DRV% "%FORGE_VIRTIO_SHARE%" /user:guest "" /persistent:no >> "%FORGE_LOG%" 2>&1
+)
+if exist "%FORGE_DRV%\forge-install-drivers\*.inf" goto :drv_ok
+if %FORGE_DRV_TRIES% lss 3 (
+  ping -n 11 127.0.0.1 >nul
+  goto :drv_retry
+)
+echo [error] Flat driver folder not reachable at %FORGE_VIRTIO_SHARE%\forge-install-drivers. >> "%FORGE_LOG%"
+echo         Without it the installed OS gets no VirtIO storage or network driver. >> "%FORGE_LOG%"
+echo         Rebuild with: make prepare-windows-media >> "%FORGE_LOG%"
+goto :fail
+:drv_ok
 
 rem -------------------------------------------------------------------
 rem 4. Wipe and partition the target disk (UEFI / GPT).
@@ -91,31 +128,51 @@ rem    already carries a partition table from an earlier attempt on
 rem    this same host can come up offline or read-only, and "clean"
 rem    itself refuses to run on such a disk ("Virtual Disk Service
 rem    error: The operation is not allowed on a disk that is
-rem    offline."), confirmed on a real rerun in this environment. Both
-rem    commands are harmless no-ops on a disk that is already online
-rem    and writable.
+rem    offline."), confirmed on a real rerun in this environment.
+rem
+rem    They MUST live in their own script though: they are NOT no-ops
+rem    on a disk that is already online -- "online disk" then raises a
+rem    VDS ERROR ("This disk is already online") and diskpart /s
+rem    ABORTS THE WHOLE SCRIPT at the first failing command, so clean/
+rem    convert/format silently never ran and Setup found the previous
+rem    half-install ("It looks like you started an upgrade" dialog;
+rem    observed 2026-08-30, docs/logbook/07-project-review.md). So:
+rem    first a best-effort prep script whose errors are acceptable,
+rem    then the wipe script that must succeed from its first command.
+rem
+rem    The NTFS volume created and lettered below is the bug 32 fix
+rem    (docs/logbook/06-fase6-provisioning-windows.md): setup.exe run
+rem    from WinPE puts its working set ($WINDOWS.~BT, and the Panther
+rem    logs that were never found) on a writable LOCAL NTFS volume,
+rem    never on the X: RAM disk -- and this environment's install
+rem    source is a deliberately read-only SMB share, so after a bare
+rem    clean/convert there was nowhere writable at all and Setup died
+rem    with 0xC190011F before it could even write the log saying so.
+rem    The answer file's DiskConfiguration (WillWipeDisk=true) replaces
+rem    this scratch layout with the real ESP/MSR/Windows one anyway,
+rem    so nothing here needs to match it.
 rem -------------------------------------------------------------------
-echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
+echo [4/6] Preparing disk 0... & echo [4/6] diskpart prep (best-effort) >> "%FORGE_LOG%"
 (
   echo select disk 0
   echo online disk
   echo attributes disk clear readonly
+) > X:\forge-diskprep.txt
+diskpart /s X:\forge-diskprep.txt >> "%FORGE_LOG%" 2>&1
+echo [4/6] diskpart wipe >> "%FORGE_LOG%"
+(
+  echo select disk 0
   echo clean
   echo convert gpt
+  echo create partition primary
+  echo format fs=ntfs quick label=FORGESCRATCH
+  echo assign letter=C
   echo rescan
 ) > X:\forge-diskpart.txt
 diskpart /s X:\forge-diskpart.txt >> "%FORGE_LOG%" 2>&1
-rem bug 32 (docs/logbook/06-fase6-provisioning-windows.md): setup.exe
-rem launched immediately after "clean"/"convert gpt" consistently failed
-rem with 0xC190011F, before ever writing setupact.log, while the exact
-rem same setup.exe invocation launched by hand minutes later on the
-rem same disk succeeded and reached the interactive GUI -- a race
-rem between diskpart's disk operations and Setup's own disk
-rem enumeration, not an answer-file problem (confirmed separately by
-rem testing with no answer file at all). "rescan" forces diskpart to
-rem re-enumerate synchronously before this script continues, so Setup
-rem never sees a disk mid-transition.
-timeout /t 5 /nobreak >nul
+rem timeout.exe does not exist in WinPE ("'timeout' is not recognized",
+rem observed 2026-08-30); ping to localhost is the WinPE-safe sleep.
+ping -n 6 127.0.0.1 >nul
 
 rem -------------------------------------------------------------------
 rem 5. Announce that installation has started.
@@ -164,14 +221,29 @@ rem itself, not yet understood, leaves the disk ready for the next one.
 rem A bounded retry is the pragmatic fix: if Setup actually succeeds it
 rem reboots the machine and none of this runs again anyway, so retrying
 rem unconditionally on any non-reboot return is safe.
+rem The media-root setup.exe (the modern entry point), NOT
+rem sources\setup.exe: /InstallDrivers belongs to the new setup engine
+rem and the legacy sources binary rejects it outright ("An unknown
+rem command-line option [/InstallDrivers] was specified", observed on
+rem the first /InstallDrivers run). The old reason to avoid the stub
+rem (it swallowed dialogs and logs during the bug-32 diagnosis) died
+rem with the move to the full Setup image: Panther logging works here
+rem regardless of the entry point.
+rem /InstallDrivers (WinPE-supported since 24H2, recursive) carries
+rem the VirtIO drivers into the installed OS; it replaces the answer
+rem file's DriverPaths block, which this setup engine rejects at parse
+rem time (bug 32). Without it the installed OS would have no NetKVM,
+rem the specialize-pass downloads would fail, and the pipeline would
+rem stall right after an apparently successful install.
 set FORGE_SETUP_TRIES=0
 :setup_retry
 set /a FORGE_SETUP_TRIES+=1
-%FORGE_SRC%\setup.exe
+%FORGE_SRC%\setup.exe /InstallDrivers %FORGE_DRV%\forge-install-drivers
 set FORGE_SETUP_RC=%errorlevel%
 echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
 if %FORGE_SETUP_TRIES% lss 3 (
-  timeout /t 60 /nobreak >nul
+  rem timeout.exe does not exist in WinPE; ping is the safe sleep.
+  ping -n 61 127.0.0.1 >nul
   goto :setup_retry
 )
 

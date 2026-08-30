@@ -17,14 +17,21 @@ cat <<'FORGE_MOTD_EOF'
     State API   http://{{ provisioning_network.gateway }}:{{ control_plane.boot_http_port }}/api/state
 
   Both UIs use a self-signed certificate.
+{# ansible_default_ipv4 is a gathered fact: absent entirely when this
+   template is rendered outside a play (validate-templates, pytest).
+   `x.address | default(...)` does not survive that -- under
+   StrictUndefined the attribute access on the undefined dict raises
+   before the default applies -- so the dict itself needs a default
+   first. #}
+{% set forge_host_addr = (ansible_default_ipv4 | default({})).address | default('<this-host>') %}
 {% if forge_proxy_bind_address_is_loopback | default(true) %}
   Published on loopback only. From another machine on the LAN:
-    ssh -L {{ control_plane.proxy_https_port }}:127.0.0.1:{{ control_plane.proxy_https_port }} {{ ansible_user | default('<user>') }}@{{ ansible_default_ipv4.address | default('<this-host>') }}
+    ssh -L {{ control_plane.proxy_https_port }}:127.0.0.1:{{ control_plane.proxy_https_port }} {{ ansible_user | default('<user>') }}@{{ forge_host_addr }}
   and add to your hosts file:
     127.0.0.1  {{ control_plane.gitea_hostname }} {{ control_plane.semaphore_hostname }}
 {% else %}
   Published on the LAN. Add to your hosts file:
-    {{ ansible_default_ipv4.address | default('<this-host>') }}  {{ control_plane.gitea_hostname }} {{ control_plane.semaphore_hostname }}
+    {{ forge_host_addr }}  {{ control_plane.gitea_hostname }} {{ control_plane.semaphore_hostname }}
 {% endif %}
 
 FORGE_MOTD_EOF

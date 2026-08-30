@@ -105,6 +105,48 @@
   when: forge_virtio_paths.results | rejectattr('stat.exists') | list | length > 0
   tags: [media, windows, validation]
 
+- name: Stage the flat driver folder for setup.exe /InstallDrivers
+  # startnet.cmd passes this folder to setup.exe with /InstallDrivers
+  # (supported from WinPE since 24H2) so the installed OS receives the
+  # VirtIO drivers. This replaced the answer file's
+  # PnpCustomizationsWinPE/DriverPaths block, which the Server 2025
+  # setup engine rejects at parse time (bug 32,
+  # docs/logbook/06-fase6-provisioning-windows.md). One flat folder,
+  # every .inf with its siblings, exported read-only over the virtio
+  # SMB share like the rest of this tree.
+  ansible.builtin.shell:
+    cmd: |
+      set -Eeuo pipefail
+      flat="{{ storage.http_root }}/windows/virtio/forge-install-drivers"
+      mkdir -p "$flat"
+      rm -rf "${flat:?}"/*
+      for path in {{ media.windows.virtio.driver_paths | map('quote') | join(' ') }}; do
+        src="{{ storage.http_root }}/windows/virtio/${path}"
+        if [ -d "$src" ]; then
+          cp -a "$src"/. "$flat"/
+        fi
+      done
+      chmod -R a+rX "$flat"
+      ls -1 "$flat"/*.inf
+    executable: /bin/bash
+  become: true
+  register: forge_virtio_flat
+  changed_when: true
+  tags: [media, windows]
+
+- name: Assert the flat driver folder holds the expected drivers
+  ansible.builtin.assert:
+    that:
+      - forge_virtio_flat.stdout_lines | select('search', '\.inf$') | list | length >= 2
+    fail_msg: |
+      forge-install-drivers ended up without .inf files -- setup.exe's
+      /InstallDrivers would silently install nothing, and the installed
+      OS would boot with no VirtIO storage or network driver.
+    success_msg: >-
+      {{ forge_virtio_flat.stdout_lines | select('search', '\.inf$') | list | length }}
+      driver .inf file(s) staged for /InstallDrivers
+  tags: [media, windows, validation]
+
 - name: Confirm the guest agent installer is present
   ansible.builtin.stat:
     path: "{{ storage.http_root }}/windows/virtio/{{ media.windows.virtio.guest_agent_path }}"

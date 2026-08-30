@@ -111,12 +111,50 @@ def test_installs_to_the_windows_partition(unattend_tree):
     )
 
 
-def test_virtio_driver_paths_are_present(unattend_tree, base_config):
-    """Without viostor, Setup reports 'We couldn't find any drives'."""
-    paths = [p.text for p in unattend_tree.findall(".//u:DriverPaths//u:Path", NS)]
-    assert paths, "no DriverPaths: Windows has no in-box VirtIO driver"
-    assert len(paths) == len(base_config["media"]["windows"]["virtio"]["driver_paths"])
-    assert all(path.startswith("\\\\") for path in paths), "driver paths must be UNC"
+def test_no_driver_paths_block_survives(unattend_tree):
+    """The Server 2025 setup engine rejects PathAndCredentials outright
+    at parse time (bug 32, CSI E_INVALIDARG "name in handler = 0") and
+    aborts the whole windowsPE pass. Drivers travel via setup.exe
+    /InstallDrivers instead -- covered by the startnet.cmd test below.
+    Reintroducing DriverPaths would silently kill unattended installs."""
+    assert unattend_tree.findall(".//u:DriverPaths", NS) == [], (
+        "DriverPaths must NOT be in the answer file: this setup engine "
+        "rejects it and the whole windowsPE pass fails (bug 32)"
+    )
+
+
+def test_startnet_passes_installdrivers(jinja_env, base_config, windows_host):
+    """The /InstallDrivers flag is what carries the VirtIO drivers into
+    the installed OS now that DriverPaths is gone. Without it the OS
+    installs, boots, and then has no network -- the specialize-phase
+    downloads fail and the pipeline stalls late and confusingly."""
+    script = jinja_env.get_template("windows/startnet.cmd.j2").render(
+        **render_context.build_context(base_config, host=windows_host)
+    )
+    assert "/InstallDrivers" in script
+    assert "forge-install-drivers" in script
+
+
+def test_startnet_avoids_winpe_traps(jinja_env, base_config, windows_host):
+    """Two WinPE facts learned the hard way (2026-08-30):
+    - timeout.exe does not ship in WinPE ('timeout' is not recognized),
+      so every wait must use ping -n to localhost instead;
+    - diskpart /s aborts the WHOLE script at the first failing command,
+      and 'online disk' FAILS on a disk that is already online, so the
+      best-effort prep (online/readonly) must live in a separate script
+      from the clean/format sequence or a dirty disk is never wiped and
+      Setup finds the previous half-install (upgrade dialog)."""
+    script = jinja_env.get_template("windows/startnet.cmd.j2").render(
+        **render_context.build_context(base_config, host=windows_host)
+    )
+    assert "timeout /t" not in script, "timeout.exe does not exist in WinPE"
+    assert "forge-diskprep.txt" in script, "prep and wipe must be separate diskpart scripts"
+    assert script.index("echo online disk") < script.index("forge-diskprep.txt"), (
+        "online disk belongs to the best-effort prep script"
+    )
+    assert script.index("echo clean") > script.index("forge-diskprep.txt"), (
+        "clean belongs to the wipe script, after the prep script ran"
+    )
 
 
 def test_computer_name_is_set_and_within_the_netbios_limit(unattend_tree, windows_host):
@@ -126,7 +164,7 @@ def test_computer_name_is_set_and_within_the_netbios_limit(unattend_tree, window
     assert computer_name.text == windows_host["name"].upper()[:15]
 
 
-def test_setupcomplete_is_staged_during_specialize(unattend_tree):
+def test_specialize_fetches_the_bootstrap_script(unattend_tree):
     """Without this the host installs but never gets a WinRM listener."""
     commands = [
         c.find("u:Path", NS).text
@@ -134,9 +172,38 @@ def test_setupcomplete_is_staged_during_specialize(unattend_tree):
     ]
     joined = " ".join(commands)
 
-    assert "SetupComplete.cmd" in joined
-    assert "Configure-WinRM.ps1" in joined
-    assert "/api/state/" in joined, "the specialize pass must report state=installed"
+    assert "specialize.cmd" in joined
+    assert "exit /b 0" in joined, (
+        "a transient download failure must not abort the whole install"
+    )
+
+
+def test_specialize_paths_stay_under_the_validator_limit(unattend_tree):
+    """Bug 37: the SMI validator that re-checks the cached unattend.xml
+    at the start of the specialize pass rejects RunSynchronousCommand
+    Path values of the length the old curl-with-fallback one-liners had
+    (400+ chars): 'Value is invalid', the whole answer file is declared
+    invalid, and windeploy aborts with 0x1f. Anything that needs more
+    room belongs in specialize.cmd, not inline."""
+    for command in unattend_tree.findall(".//u:RunSynchronous/u:RunSynchronousCommand", NS):
+        path = command.find("u:Path", NS).text
+        assert len(path) < 259, (
+            f"RunSynchronousCommand Path is {len(path)} chars; the specialize "
+            f"validator rejected our 400+ char commands (bug 37): {path[:80]}..."
+        )
+
+
+def test_specialize_cmd_stages_scripts_and_reports_installed(jinja_env, base_config, windows_host):
+    """specialize.cmd carries the work the inline commands used to do
+    (bug 37): stage the post-install scripts and report installed."""
+    script = jinja_env.get_template("windows/specialize.cmd.j2").render(
+        **render_context.build_context(base_config, host=windows_host)
+    )
+    assert "SetupComplete.cmd" in script
+    assert "Configure-WinRM.ps1" in script
+    assert "/api/state/" in script, "specialize.cmd must report state=installed"
+    assert '\\"state\\":\\"installed\\"' in script
+    assert script.startswith("@echo off")
 
 
 def test_specialize_commands_are_ordered(unattend_tree):
