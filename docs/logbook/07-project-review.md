@@ -240,3 +240,47 @@ i driver in consegna via /InstallDrivers. Prossimi checkpoint: i
 riavvii intermedi devono ricevere `dispatch-local-mid-install`
 (fix 33), poi specialize → `installed` → SetupComplete →
 `configuring` → WinRM.
+
+## 2026-08-30 — Il fix 33 convalidato dal vivo; bug 36 (aperto): dopo l'exit di iPXE il firmware non arriva a Windows Boot Manager
+
+L'installazione non presidiata è progredita 13% → 29% → 78%, poi il
+primo riavvio di metà installazione (10:24:45Z). La state API ha
+risposto esattamente come da progetto: `dispatch-local-mid-install
+1/3`, attempts fermo a 1 — **il fix del bug 33 funziona dal vivo**.
+
+Ma il boot successivo non è arrivato a Windows: la VM è ricaduta nel
+menu firmware TianoCore invece di caricare il boot manager appena
+scritto da Setup. Il menu Boot Manager del firmware (screenshot
+s0336/s0337) elenca, nell'ordine: UEFI PXEv4, PXEv6, HTTPv4, HTTPv6,
+**Windows Boot Manager** (Device Path
+`HD(1,GPT,5F3B208F-…)\EFI\Microsoft\Boot\bootmgfw.efi`), UEFI Misc
+Device, EFI Internal Shell, UEFI QEMU DVD-ROM. Quindi Setup HA
+scritto la ESP e la voce NVRAM; il problema è la catena di
+continuazione: dopo che lo script `boot local` di iPXE fa `exit`,
+BdsDxe avrebbe dovuto scorrere le voci successive fino a WBM, e
+invece si è fermato al menu.
+
+**Bug 36, per ora aperto e non diagnosticato con certezza.** Due
+ipotesi in campo, non ancora discriminate:
+
+1. Comportamento reale di OVMF: con `-boot` via fw_cfg, la
+   rielaborazione di BootOrder (QemuBootOrderLib) potrebbe non
+   riprendere la sequenza automatica dopo il ritorno dell'app iPXE.
+2. Interferenza dei miei stessi `send-key` di diagnostica: attorno al
+   riavvio stavo ancora interagendo con la console; un tasto arrivato
+   durante il prompt del bootmenu (timeout 3 s nel dominio) può aver
+   interrotto la sequenza e aperto il menu.
+
+Il prossimo riavvio di metà installazione è l'esperimento
+discriminante: **osservazione puramente passiva, zero tasti inviati
+al guest**. Se auto-avvia WBM, il bug 36 si declassa a interferenza
+dell'operatore; se ricade nel menu, è reale e va corretto (candidati
+già analizzati: hd-first per i domini Windows sfruttando il
+fall-through naturale del disco vuoto verso PXE; `bcdedit
+/set {fwbootmgr}`; flip anticipato del boot order).
+
+Nel frattempo: selezionata manualmente la voce Windows Boot Manager
+(4×DOWN + ENTER, evidenziazione verificata su screenshot prima
+dell'invio). Windows è ripartito da disco — **"Installing 42% — Your
+computer may restart a few times"** — la fase offline del setup
+moderno prosegue. Stato: `installing`, attempts=1, local_boots=1.
