@@ -80,8 +80,16 @@ MAX_ATTEMPTS = int(os.environ.get("FORGE_MAX_INSTALL_ATTEMPTS", "3"))
 # docs/logbook/07-project-review.md: without this, the dispatch
 # re-served the installer at that reboot and wiped the half-written
 # disk on every attempt.
+# 8, not 3: one physical reboot can consume MORE than one dispatch --
+# observed live (2026-08-30): after `exit 1` the firmware ran the PXEv4
+# option's iPXE twice before walking on, so a single mid-install reboot
+# moved the counter by 2. Windows Server restarts 2-3 times during the
+# offline phase; with a limit of 3 the second dispatch of the second
+# reboot would already fall through and re-serve the INSTALLER onto a
+# nearly-complete disk. 8 gives ~4 double-dispatch reboots of headroom
+# while still bounding a genuinely dead install.
 WINDOWS_MID_INSTALL_LOCAL_BOOTS = int(
-    os.environ.get("FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS", "3")
+    os.environ.get("FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS", "8")
 )
 SHARED_TOKEN = os.environ.get("FORGE_STATE_TOKEN", "").strip()
 MAX_BODY_BYTES = int(os.environ.get("FORGE_MAX_BODY_BYTES", str(32 * 1024 * 1024)))

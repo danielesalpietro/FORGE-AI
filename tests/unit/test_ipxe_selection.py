@@ -188,7 +188,10 @@ def test_windows_mid_install_local_boots_are_bounded(state_service, windows_mac)
     """A genuinely dead install must still fall back to the retry path
     instead of booting a dead disk forever."""
     state_service.dispatch(windows_mac)  # attempt 1
-    for _ in range(3):  # FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS defaults to 3
+    # Use the real constant: one physical reboot can consume more than
+    # one dispatch (the firmware ran iPXE twice per reboot, observed
+    # live 2026-08-30), which is why the default is 8 and not 3.
+    for _ in range(state_service.WINDOWS_MID_INSTALL_LOCAL_BOOTS):
         _, script = state_service.dispatch(windows_mac)
         assert "mid-install reboot" in script
 
