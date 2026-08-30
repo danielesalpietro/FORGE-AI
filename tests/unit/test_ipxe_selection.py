@@ -139,8 +139,9 @@ def test_the_installer_stops_being_offered_at_the_limit(state_service, ubuntu_ma
     assert "install.ipxe" not in script
     # bug 22 (docs/logbook/05-fase6-provisioning-target-vm.md): sanboot
     # is a BIOS/legacy trick that fails on UEFI guests; local boot falls
-    # through to firmware via a plain `exit` instead.
-    assert "exit" in script
+    # through to firmware via `exit 1` -- the error status is what makes
+    # the firmware proceed to the hd boot option (bug 36).
+    assert "exit 1" in script
     assert "refusing to reinstall" in script
 
 
@@ -271,8 +272,9 @@ def test_an_installed_host_boots_locally(state_service, ubuntu_mac, state):
 
     _, script = state_service.dispatch(ubuntu_mac)
 
-    # bug 22: sanboot fails on UEFI guests, local boot uses a plain exit.
-    assert "exit" in script
+    # bug 22: sanboot fails on UEFI guests; bug 36: the exit must carry
+    # an error status or the firmware stops at its menu instead of hd.
+    assert "exit 1" in script
     assert "install.ipxe" not in script
     assert f"state={state}" in script
 
@@ -377,8 +379,9 @@ def test_boot_script_has_a_local_disk_fallback(jinja_env, base_config):
     script = jinja_env.get_template("ipxe/boot.ipxe.j2").render(
         **render_context.build_context(base_config)
     )
-    # bug 22: sanboot fails on UEFI guests, local boot uses a plain exit.
-    assert "exit" in script
+    # bug 22: sanboot fails on UEFI guests; bug 36: the exit must carry
+    # an error status or the firmware stops at its menu instead of hd.
+    assert "exit 1" in script
     assert ":localboot" in script
 
 

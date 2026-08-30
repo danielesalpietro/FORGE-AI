@@ -228,16 +228,23 @@ def script_local(host: dict | None, record: dict, reason: str) -> str:
     # `sanboot --drive 0x80` is a BIOS/legacy INT13 trick; these guests are
     # UEFI, and iPXE reports "No such device" for it there ("Boot from SAN
     # device 0x80 failed: No such device", confirmed on real hardware via
-    # `virsh screenshot`). Plain `exit` returns control to firmware, which
-    # then proceeds to the domain's own next boot option (hd) -- the
-    # standard iPXE technique for UEFI local-disk fallback.
+    # `virsh screenshot`). The exit status matters just as much (bug 36,
+    # docs/logbook/07-project-review.md): a plain `exit` returns
+    # EFI_SUCCESS, EDK2's BdsDxe takes that as "this boot option
+    # succeeded", stops walking the boot order, and drops to the firmware
+    # menu -- observed twice on mid-install reboots with a perfectly
+    # valid Windows Boot Manager entry sitting right after the network
+    # entries. `exit 1` returns an error status, which is what makes the
+    # firmware proceed to the next boot option (hd): the documented iPXE
+    # technique for UEFI local-disk fallback
+    # (github.com/ipxe/ipxe/discussions/789).
     return f"""#!ipxe
 # FORGE-AI state service: local boot
 echo
 echo [state] {name}: {reason}
 echo [state] booting from local disk
 echo
-exit
+exit 1
 """
 
 

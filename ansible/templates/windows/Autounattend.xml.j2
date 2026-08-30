@@ -217,36 +217,26 @@
                language="neutral"
                versionScope="nonSxS">
       <RunSynchronous>
+        <!-- Bug 37 (docs/logbook/07-project-review.md): the SMI
+             validator that re-checks the cached unattend.xml at the
+             start of the specialize pass rejects RunSynchronousCommand
+             Path values of the length the previous curl-with-fallback
+             one-liners had (400+ characters): "Value is invalid",
+             the whole answer file is declared invalid, and windeploy
+             aborts with 0x1f ("restarted unexpectedly" dialog). The
+             short one-liners in the same block passed. So the Path
+             stays under 200 characters and all the real work lives in
+             specialize.cmd, fetched from the boot server exactly like
+             SetupComplete.cmd (MDT structures its unattend the same
+             way). The trailing "exit /b 0" keeps a transient download
+             failure from aborting the whole installation: without the
+             staged scripts the host simply never reports "installed"
+             and the provisioning playbook times out with a precise
+             diagnostic, which beats an unbootable half-install. -->
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
-          <Description>FORGE-AI: create the setup scripts directory</Description>
-          <Path>cmd.exe /c md C:\Windows\Setup\Scripts</Path>
-          <WillReboot>Never</WillReboot>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>2</Order>
-          <Description>FORGE-AI: stage the provisioning marker</Description>
-          <Path>cmd.exe /c md C:\ProgramData\forge-ai</Path>
-          <WillReboot>Never</WillReboot>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>3</Order>
-          <Description>FORGE-AI: download SetupComplete.cmd</Description>
-          <!-- curl.exe ships in the installed OS from Server 2019
-               onwards. PowerShell is the fallback for older images. -->
-          <Path>cmd.exe /c curl.exe --silent --show-error --retry 5 --retry-delay 5 --max-time 120 -o C:\Windows\Setup\Scripts\SetupComplete.cmd {{ forge_boot_base_url }}/windows/{{ host.name }}/SetupComplete.cmd || powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri '{{ forge_boot_base_url }}/windows/{{ host.name }}/SetupComplete.cmd' -OutFile 'C:\Windows\Setup\Scripts\SetupComplete.cmd'"</Path>
-          <WillReboot>Never</WillReboot>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>4</Order>
-          <Description>FORGE-AI: download Configure-WinRM.ps1</Description>
-          <Path>cmd.exe /c curl.exe --silent --show-error --retry 5 --retry-delay 5 --max-time 120 -o C:\Windows\Setup\Scripts\Configure-WinRM.ps1 {{ forge_boot_base_url }}/windows/{{ host.name }}/Configure-WinRM.ps1 || powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri '{{ forge_boot_base_url }}/windows/{{ host.name }}/Configure-WinRM.ps1' -OutFile 'C:\Windows\Setup\Scripts\Configure-WinRM.ps1'"</Path>
-          <WillReboot>Never</WillReboot>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>5</Order>
-          <Description>FORGE-AI: report state=installed</Description>
-          <Path>cmd.exe /c curl.exe --silent --max-time 30 --retry 3 -X POST -H "Content-Type: application/json"{% if forge_state_token | default('') | length > 0 %} -H "X-Forge-Token: {{ forge_state_token }}"{% endif %} -d "{\"state\":\"installed\",\"source\":\"windows-specialize\",\"host\":\"{{ host.name }}\"}" {{ forge_boot_base_url }}/api/state/{{ host.mac_address | replace(':', '-') }}</Path>
+          <Description>FORGE-AI: fetch and run specialize.cmd</Description>
+          <Path>cmd.exe /c curl.exe -sS --retry 5 --retry-delay 5 --max-time 180 -o C:\Windows\Temp\forge-sp.cmd {{ forge_boot_base_url }}/windows/{{ host.name }}/specialize.cmd &amp; call C:\Windows\Temp\forge-sp.cmd &amp; exit /b 0</Path>
           <WillReboot>Never</WillReboot>
         </RunSynchronousCommand>
       </RunSynchronous>

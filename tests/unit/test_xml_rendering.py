@@ -142,7 +142,7 @@ def test_computer_name_is_set_and_within_the_netbios_limit(unattend_tree, window
     assert computer_name.text == windows_host["name"].upper()[:15]
 
 
-def test_setupcomplete_is_staged_during_specialize(unattend_tree):
+def test_specialize_fetches_the_bootstrap_script(unattend_tree):
     """Without this the host installs but never gets a WinRM listener."""
     commands = [
         c.find("u:Path", NS).text
@@ -150,9 +150,38 @@ def test_setupcomplete_is_staged_during_specialize(unattend_tree):
     ]
     joined = " ".join(commands)
 
-    assert "SetupComplete.cmd" in joined
-    assert "Configure-WinRM.ps1" in joined
-    assert "/api/state/" in joined, "the specialize pass must report state=installed"
+    assert "specialize.cmd" in joined
+    assert "exit /b 0" in joined, (
+        "a transient download failure must not abort the whole install"
+    )
+
+
+def test_specialize_paths_stay_under_the_validator_limit(unattend_tree):
+    """Bug 37: the SMI validator that re-checks the cached unattend.xml
+    at the start of the specialize pass rejects RunSynchronousCommand
+    Path values of the length the old curl-with-fallback one-liners had
+    (400+ chars): 'Value is invalid', the whole answer file is declared
+    invalid, and windeploy aborts with 0x1f. Anything that needs more
+    room belongs in specialize.cmd, not inline."""
+    for command in unattend_tree.findall(".//u:RunSynchronous/u:RunSynchronousCommand", NS):
+        path = command.find("u:Path", NS).text
+        assert len(path) < 259, (
+            f"RunSynchronousCommand Path is {len(path)} chars; the specialize "
+            f"validator rejected our 400+ char commands (bug 37): {path[:80]}..."
+        )
+
+
+def test_specialize_cmd_stages_scripts_and_reports_installed(jinja_env, base_config, windows_host):
+    """specialize.cmd carries the work the inline commands used to do
+    (bug 37): stage the post-install scripts and report installed."""
+    script = jinja_env.get_template("windows/specialize.cmd.j2").render(
+        **render_context.build_context(base_config, host=windows_host)
+    )
+    assert "SetupComplete.cmd" in script
+    assert "Configure-WinRM.ps1" in script
+    assert "/api/state/" in script, "specialize.cmd must report state=installed"
+    assert '\\"state\\":\\"installed\\"' in script
+    assert script.startswith("@echo off")
 
 
 def test_specialize_commands_are_ordered(unattend_tree):

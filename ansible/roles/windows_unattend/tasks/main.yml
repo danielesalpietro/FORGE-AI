@@ -5,7 +5,8 @@
 # Three artefacts per host:
 #
 #   Autounattend.xml     delivered by wimboot into WinPE's System32
-#   SetupComplete.cmd    fetched during specialize, run at end of Setup
+#   specialize.cmd       fetched and run during specialize (bug 37)
+#   SetupComplete.cmd    staged by specialize.cmd, run at end of Setup
 #   Configure-WinRM.ps1  invoked by SetupComplete.cmd
 #
 # Autounattend.xml carries the administrator password in Windows'
@@ -100,6 +101,26 @@
   changed_when: true
   no_log: true
   tags: [windows, security]
+
+- name: Render specialize.cmd
+  # Fetched and run by the single specialize RunSynchronousCommand: the
+  # SMI validator rejects long inline Path values (bug 37), so the
+  # answer file carries only a short wrapper and this script does the
+  # actual staging and state reporting.
+  ansible.builtin.template:
+    src: "{{ forge_shared_templates_dir }}/windows/specialize.cmd.j2"
+    dest: "{{ storage.http_root }}/windows/{{ item.name }}/specialize.cmd"
+    owner: root
+    group: root
+    mode: "0644"
+    newline_sequence: "\r\n"
+  become: true
+  vars:
+    host: "{{ item }}"
+  loop: "{{ forge_windows_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [windows]
 
 - name: Render SetupComplete.cmd
   ansible.builtin.template:
@@ -216,7 +237,7 @@
     url: "{{ forge_boot_base_url }}/windows/{{ item.0.name }}/{{ item.1 }}"
     method: HEAD
     status_code: [200]
-  loop: "{{ forge_windows_hosts | product(['SetupComplete.cmd', 'Configure-WinRM.ps1']) | list }}"
+  loop: "{{ forge_windows_hosts | product(['specialize.cmd', 'SetupComplete.cmd', 'Configure-WinRM.ps1']) | list }}"
   loop_control:
     label: "{{ item.0.name }}/{{ item.1 }}"
   register: forge_winscripts_http

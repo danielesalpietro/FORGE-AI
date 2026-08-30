@@ -43,6 +43,7 @@ PER_HOST_TEMPLATES = [
     ("ubuntu/vendor-data.j2", "linux"),
     ("ipxe/host-ubuntu-install.ipxe.j2", "linux"),
     ("windows/Autounattend.xml.j2", "windows"),
+    ("windows/specialize.cmd.j2", "windows"),
     ("windows/SetupComplete.cmd.j2", "windows"),
     ("windows/Configure-WinRM.ps1.j2", "windows"),
     ("windows/startnet.cmd.j2", "windows"),
