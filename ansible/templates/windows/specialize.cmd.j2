@@ -61,8 +61,14 @@ rem -------------------------------------------------------------------
 rem 3. Ship this log to the boot server so a failed specialize run is
 rem    diagnosable without console access to the VM.
 rem -------------------------------------------------------------------
+rem The token header is not optional decoration: every POST route in the
+rem state service is authenticated, and the upload silently 401s without
+rem it (bug 42, docs/logbook/07-project-review.md).
 curl.exe --silent --max-time 60 -X POST --data-binary "@%FORGE_LOG%" ^
   -H "Content-Type: text/plain" ^
+{% if forge_state_token | default('') | length > 0 %}
+  -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
   "%FORGE_BOOT%/api/log/{{ host.name }}/specialize.log" >nul 2>&1
 
 echo [%DATE% %TIME%] FORGE-AI specialize finished >> "%FORGE_LOG%"

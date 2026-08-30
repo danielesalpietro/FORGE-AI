@@ -84,8 +84,13 @@ rem -------------------------------------------------------------------
 rem 5. Ship this log to the boot server so a failed run is diagnosable
 rem    without console access to the VM.
 rem -------------------------------------------------------------------
+rem Token required: every POST route is authenticated; without it this
+rem upload has silently 401'd since the beginning (bug 42).
 curl.exe --silent --max-time 60 -X POST --data-binary "@%FORGE_LOG%" ^
   -H "Content-Type: text/plain" ^
+{% if forge_state_token | default('') | length > 0 %}
+  -H "X-Forge-Token: {{ forge_state_token }}" ^
+{% endif %}
   "%FORGE_BOOT%/api/log/{{ host.name }}/setupcomplete.log" >nul 2>&1
 
 echo [%DATE% %TIME%] FORGE-AI SetupComplete finished >> "%FORGE_LOG%"
