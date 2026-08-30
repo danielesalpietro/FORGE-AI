@@ -40,6 +40,10 @@ def state_service(tmp_path, monkeypatch, base_config):
                 "name": host["name"],
                 "profile": host["profile"],
                 "ip_address": host["ip_address"],
+                # The real registry (ipxe_menu) carries the full host
+                # dict; os_family drives the Windows mid-install-reboot
+                # dispatch policy (bug 33).
+                "os_family": host["os_family"],
             }
             for host in base_config["hosts"]
         }
@@ -138,6 +142,61 @@ def test_the_installer_stops_being_offered_at_the_limit(state_service, ubuntu_ma
     # through to firmware via a plain `exit` instead.
     assert "exit" in script
     assert "refusing to reinstall" in script
+
+
+def test_windows_mid_install_reboot_boots_local(state_service, windows_mac):
+    """Bug 33: Windows Setup reboots mid-install and only reports
+    "installed" from the specialize pass, after its first boot from
+    disk. That PXE boot must continue from the local disk -- re-serving
+    the installer wipes the half-written disk (observed on real
+    hardware: attempt 2 dispatched at the mid-install reboot)."""
+    _, first = state_service.dispatch(windows_mac)
+    assert "install.ipxe" in first
+
+    _, reboot = state_service.dispatch(windows_mac)
+    assert "install.ipxe" not in reboot
+    assert "mid-install reboot" in reboot
+
+    record = state_service.read_state(windows_mac)
+    assert record["attempts"] == 1, "a mid-install reboot is not a new attempt"
+    assert record["install_local_boots"] == 1
+
+
+def test_windows_mid_install_local_boots_are_bounded(state_service, windows_mac):
+    """A genuinely dead install must still fall back to the retry path
+    instead of booting a dead disk forever."""
+    state_service.dispatch(windows_mac)  # attempt 1
+    for _ in range(3):  # FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS defaults to 3
+        _, script = state_service.dispatch(windows_mac)
+        assert "mid-install reboot" in script
+
+    _, script = state_service.dispatch(windows_mac)
+    assert "install.ipxe" in script, "past the bound the installer is re-served"
+    assert state_service.read_state(windows_mac)["attempts"] == 2
+
+
+def test_ubuntu_mid_install_reboot_still_retries(state_service, ubuntu_mac):
+    """Ubuntu's autoinstall reports "installed" BEFORE rebooting, so a
+    PXE boot while still "installing" really is a failed install and
+    must retry -- the Windows policy must not leak onto Linux hosts."""
+    state_service.dispatch(ubuntu_mac)
+    _, script = state_service.dispatch(ubuntu_mac)
+
+    assert "install.ipxe" in script
+    assert state_service.read_state(ubuntu_mac)["attempts"] == 2
+
+
+def test_reset_to_new_clears_the_mid_install_counter(state_service, windows_mac):
+    state_service.dispatch(windows_mac)
+    state_service.dispatch(windows_mac)  # consumes one local boot
+    record = state_service.read_state(windows_mac)
+    assert record["install_local_boots"] == 1
+
+    ok, _ = state_service.transition(record, "new", source="test")
+    state_service.write_state(record)
+
+    assert ok
+    assert record["install_local_boots"] == 0
 
 
 def test_a_host_at_the_limit_is_parked_as_failed(state_service, ubuntu_mac):

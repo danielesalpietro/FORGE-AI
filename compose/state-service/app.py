@@ -71,6 +71,18 @@ LISTEN_HOST = os.environ.get("FORGE_LISTEN_HOST", "0.0.0.0")  # noqa: S104 - con
 LISTEN_PORT = int(os.environ.get("FORGE_LISTEN_PORT", "8090"))
 BOOT_BASE_URL = os.environ.get("FORGE_BOOT_BASE_URL", "http://192.168.250.1:8080")
 MAX_ATTEMPTS = int(os.environ.get("FORGE_MAX_INSTALL_ATTEMPTS", "3"))
+# How many PXE boots a Windows host may make DURING an installation
+# before the state service concludes the install is dead and retries.
+# Windows Setup reboots mid-install (sometimes more than once) and only
+# reports "installed" from the specialize pass, which runs after the
+# first boot from disk -- so a PXE boot while "installing" is the
+# EXPECTED continuation for Windows, not a failure. See bug 33 in
+# docs/logbook/07-project-review.md: without this, the dispatch
+# re-served the installer at that reboot and wiped the half-written
+# disk on every attempt.
+WINDOWS_MID_INSTALL_LOCAL_BOOTS = int(
+    os.environ.get("FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS", "3")
+)
 SHARED_TOKEN = os.environ.get("FORGE_STATE_TOKEN", "").strip()
 MAX_BODY_BYTES = int(os.environ.get("FORGE_MAX_BODY_BYTES", str(32 * 1024 * 1024)))
 
@@ -183,6 +195,7 @@ def transition(record: dict, new_state: str, *, source: str, detail: str = "") -
     record["history"] = record["history"][-50:]
     if new_state == "new":
         record["attempts"] = 0
+        record["install_local_boots"] = 0
     return True, "ok"
 
 
@@ -267,6 +280,38 @@ def dispatch(mac: str) -> tuple[int, str]:
             )
             write_state(record)
             return HTTPStatus.OK, script_local(host, record, f"state={state}, no installation required")
+
+        if (
+            host.get("os_family") == "windows"
+            and state == "installing"
+            and record.get("attempts", 0) >= 1
+        ):
+            # Bug 33: Windows Setup reboots mid-install and only reports
+            # "installed" from the specialize pass, AFTER its first boot
+            # from disk. A PXE boot in this window is the expected
+            # continuation -- re-serving the installer here wipes the
+            # half-written disk. Boot local instead, bounded so a
+            # genuinely dead install still falls through to the retry
+            # (or the attempt-limit park) below. Checked BEFORE the
+            # attempt-limit guard: the last allowed attempt's own
+            # mid-install reboot must still boot local.
+            local_boots = record.get("install_local_boots", 0)
+            if local_boots < WINDOWS_MID_INSTALL_LOCAL_BOOTS:
+                record["install_local_boots"] = local_boots + 1
+                record.setdefault("history", []).append(
+                    {"at": now_iso(), "event": "dispatch-local-mid-install",
+                     "source": "ipxe",
+                     "detail": (f"mid-install reboot "
+                                f"{local_boots + 1}/{WINDOWS_MID_INSTALL_LOCAL_BOOTS}")}
+                )
+                record["updated_at"] = now_iso()
+                write_state(record)
+                LOG.info("%s mid-install reboot %d/%d: booting local",
+                         host["name"], local_boots + 1, WINDOWS_MID_INSTALL_LOCAL_BOOTS)
+                return HTTPStatus.OK, script_local(
+                    host, record, "mid-install reboot, continuing from local disk",
+                )
+            record["install_local_boots"] = 0
 
         if record.get("attempts", 0) >= MAX_ATTEMPTS:
             # Loop guard. Park the host instead of reinstalling forever.
