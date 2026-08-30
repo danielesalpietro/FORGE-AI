@@ -111,12 +111,28 @@ def test_installs_to_the_windows_partition(unattend_tree):
     )
 
 
-def test_virtio_driver_paths_are_present(unattend_tree, base_config):
-    """Without viostor, Setup reports 'We couldn't find any drives'."""
-    paths = [p.text for p in unattend_tree.findall(".//u:DriverPaths//u:Path", NS)]
-    assert paths, "no DriverPaths: Windows has no in-box VirtIO driver"
-    assert len(paths) == len(base_config["media"]["windows"]["virtio"]["driver_paths"])
-    assert all(path.startswith("\\\\") for path in paths), "driver paths must be UNC"
+def test_no_driver_paths_block_survives(unattend_tree):
+    """The Server 2025 setup engine rejects PathAndCredentials outright
+    at parse time (bug 32, CSI E_INVALIDARG "name in handler = 0") and
+    aborts the whole windowsPE pass. Drivers travel via setup.exe
+    /InstallDrivers instead -- covered by the startnet.cmd test below.
+    Reintroducing DriverPaths would silently kill unattended installs."""
+    assert unattend_tree.findall(".//u:DriverPaths", NS) == [], (
+        "DriverPaths must NOT be in the answer file: this setup engine "
+        "rejects it and the whole windowsPE pass fails (bug 32)"
+    )
+
+
+def test_startnet_passes_installdrivers(jinja_env, base_config, windows_host):
+    """The /InstallDrivers flag is what carries the VirtIO drivers into
+    the installed OS now that DriverPaths is gone. Without it the OS
+    installs, boots, and then has no network -- the specialize-phase
+    downloads fail and the pipeline stalls late and confusingly."""
+    script = jinja_env.get_template("windows/startnet.cmd.j2").render(
+        **render_context.build_context(base_config, host=windows_host)
+    )
+    assert "/InstallDrivers" in script
+    assert "forge-install-drivers" in script
 
 
 def test_computer_name_is_set_and_within_the_netbios_limit(unattend_tree, windows_host):

@@ -46,9 +46,9 @@
          here, deliberately: this build's setup engine (Server 2025,
          26100.32230) rejects the PathAndCredentials list items outright
          at parse time (CSI E_INVALIDARG, "name in handler = 0",
-         setuperr.log) and aborts the whole windowsPE pass -- bug 32,
-         docs/logbook/06-fase6-provisioning-windows.md. The VirtIO
-         drivers reach the installed OS through setup.exe's
+         setuperr.log) and aborts the whole windowsPE pass. That is
+         bug 32, docs/logbook/06-fase6-provisioning-windows.md. The
+         VirtIO drivers reach the installed OS through setup.exe's
          /InstallDrivers command-line option instead (supported from
          WinPE since 24H2), passed by startnet.cmd.j2 against the flat
          driver folder that windows_media stages into the virtio SMB
