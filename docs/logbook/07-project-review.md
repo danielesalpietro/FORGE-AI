@@ -199,3 +199,44 @@ Issue aggiuntive aperte su richiesta di Daniele durante l'attesa:
 #15-#19 e #24-#25 (asset-inventory dims.db, 6 fasi), #20-#23
 (secrets-vault + CA interna), #26-#29 (control plane multi-nodo con
 API e CLI `dims`).
+
+## 2026-08-30 — Bug 34 e 35, colti entrambi dal vivo sul run definitivo
+
+**Bug 34 — la fetch di validazione del deployment contava come
+dispatch reale.** Al primo tentativo del run definitivo lo stato
+mostrava `install_local_boots=1` dopo 10 minuti — impossibile per un
+riavvio vero. La history lo ha inchiodato: il "first dispatch" delle
+08:10:24 era la GET di validazione di `ipxe_menu` ("Prove the
+dispatch path end to end"), non la VM; il boot genuino della VM
+(08:19:49) è arrivato come secondo dispatch ed è stato classificato
+dal fix 33 come riavvio di metà installazione → boot local su disco
+vuoto → menu firmware TianoCore. Effetto collaterale storico scoperto
+retroattivamente: quella fetch **bruciava in silenzio un tentativo di
+install a ogni deployment fin dall'inizio** (ecco perché gli install
+Ubuntu partivano regolarmente da "attempt 2"). Fix: `dispatch()`
+guadagna `probe=True` (stessa decisione, zero mutazioni), l'endpoint
+accetta `?probe=1`, e il task di validazione lo usa. Test dedicato:
+un probe non tocca stato, tentativi né contatore local-boots.
+Container ricostruito. 212/212 test verdi.
+
+**Bug 35 — `/InstallDrivers` appartiene al nuovo entry point, non a
+`sources\setup.exe`.** Al riavvio pulito post-fix-34, dialogo
+esplicito: "An unknown command-line option [/InstallDrivers] was
+specified" dal binario legacy. Riletta la sezione esatta della doc
+Microsoft salvata: l'opzione è "from WinPE since 24H2", ricorsiva —
+ma implementata dal setup moderno (lo stub alla radice del media).
+La vecchia ragione per evitare lo stub (inghiottiva dialoghi e log
+durante la diagnosi del bug 32) è decaduta con il passaggio
+all'immagine Setup completa, dove il logging Panther funziona con
+qualunque entry point. Fix: startnet lancia
+`%FORGE_SRC%\setup.exe /InstallDrivers %FORGE_DRV%\forge-install-drivers`.
+
+**Esito immediato**: al ciclo successivo (stato resettato, dispatch
+genuino: attempts=1, local_boots=0) la UI moderna a schermo intero è
+comparsa per la prima volta nel flusso automatico — **"Installing
+Windows Server — Your PC will restart several times. This might take
+a while. 13% complete"** — installazione non presidiata in corso con
+i driver in consegna via /InstallDrivers. Prossimi checkpoint: i
+riavvii intermedi devono ricevere `dispatch-local-mid-install`
+(fix 33), poi specialize → `installed` → SetupComplete →
+`configuring` → WinRM.
