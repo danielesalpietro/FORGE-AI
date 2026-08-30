@@ -15,6 +15,15 @@ commit → GitHub Actions → Gitea → webhook → Semaphore → Ansible
        → baseline → validation → report → drift → reconcile
 ```
 
+> **Status — v0.1.0, validated on real hardware.** Both provisioning
+> paths have completed end-to-end on a physical deployment
+> (2026-08-30): `make provision-ubuntu` and `make provision-windows`
+> each from bare disk to an OS reachable by Ansible, exit code 0,
+> nothing touched by hand. The campaign that got there — 42 bugs
+> found, fixed and regression-tested on real hardware — is documented
+> commit by commit in [docs/logbook/](docs/logbook/), with
+> [logbook_finale.md](docs/logbook/logbook_finale.md) as the summary.
+
 ---
 
 ## What it does
@@ -176,7 +185,7 @@ make help
 | Command | Does |
 |---|---|
 | `make check` | 34 read-only prerequisite checks |
-| `make validate` | Schema, template rendering, Ansible syntax, 233 tests |
+| `make validate` | Schema, template rendering, Ansible syntax, 245 tests |
 | `make lint` | yamllint, ansible-lint (production profile), ShellCheck |
 | `make bootstrap` | Secrets, network, control plane, Gitea, Semaphore |
 | `make prepare-media` | Download, verify and unpack the installers |
@@ -219,13 +228,13 @@ make validate            # everything CI runs, locally
 
 | Layer | Count | Needs |
 |---|---|---|
-| Unit tests | 204 | Nothing |
+| Unit tests | 216 | Nothing |
 | Shell tests | 29 | `bats` |
 | Molecule | 1 scenario | Docker |
 | Integration | 10 | A live control plane |
 | Smoke test | 20+ checks | Provisioned VMs |
 
-The unit tests cover configuration validation, all 21 templates rendered
+The unit tests cover configuration validation, all 23 templates rendered
 under `StrictUndefined`, `Autounattend.xml` parsed pass by pass, the
 Windows password encoding round-trip, **the reinstall-loop guard**, and
 secret hygiene — tested against *planted* secrets, not just a clean
@@ -278,6 +287,20 @@ alternative, in **[docs/LIMITATIONS.md](docs/LIMITATIONS.md)**.
 ---
 
 ## Roadmap
+
+The next phases are tracked as GitHub issues, each broken into
+sub-issues with per-phase checklists:
+
+| Initiative | Issue |
+|---|---|
+| **Project review** — consolidation, unattended tests directly on ESXi, then the full pipeline (`make configure` → smoke → idempotence → drift) | [#5](https://github.com/danielesalpietro/FORGE-AI/issues/5) |
+| **Self-hosted runner** on real hardware, for the regression tests that only reproduce there | [#10](https://github.com/danielesalpietro/FORGE-AI/issues/10) |
+| **Environment lifecycle** — Dev → Staging → Prod on ESXi, shared storage, versioned promotion procedures, go/no-go and rollback | [#11](https://github.com/danielesalpietro/FORGE-AI/issues/11) |
+| **Asset inventory (`dims.db`)** — hardware and software described as data generated from the live systems, SBOM included, so a configuration can be reproduced on compatible hardware | [#15](https://github.com/danielesalpietro/FORGE-AI/issues/15) |
+| **Secrets vault** — one place for every secret, then SSL keys and an internal CA | [#20](https://github.com/danielesalpietro/FORGE-AI/issues/20) |
+| **`dims` control plane** — multi-node API and a pipe-composable CLI over environments | [#26](https://github.com/danielesalpietro/FORGE-AI/issues/26) |
+
+Hardening items that stay on the list independently of the phases:
 
 1. Domain join and Kerberos — removes the shared local administrator
 2. Windows LAPS, once a directory exists
