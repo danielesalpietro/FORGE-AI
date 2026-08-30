@@ -106,6 +106,17 @@ sono i valori **letti dal file reale** funzionante:
       generare alla webGUI *prima* di aggiungere a mano le chiavi
       vhv/MMIO; per la GTX 1060 vanno passate **entrambe le funzioni**
       (VGA `0x1c03` e audio `0x10f1`).
+- [ ] **⚠ Ogni successiva modifica dalla webGUI RIMUOVE
+      silenziosamente `vhv.enable = "TRUE"`** — Broadcom non vuole la
+      combinazione, e la GUI la "corregge" senza avvisare né fallire.
+      Quindi, su una VM con GPU condivisa + nested VT-x: dopo
+      QUALUNQUE modifica di configurazione fatta dalla GUI,
+      ri-verificare il `.vmx` sul datastore
+      (`grep -i vhv <vm>.vmx` → devono esserci ancora `vhv.enable` e
+      `vhv.allowPassthru`) e nella guest (`kvm-ok`) prima di fidarsi.
+      Il sintomo a valle è subdolo: la VM parte normalmente ma
+      `/dev/kvm` sparisce e le VM annidate cadono in emulazione TCG
+      (lentissima) o non partono.
 
 ## File `user-data` (autoinstall)
 

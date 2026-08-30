@@ -475,3 +475,11 @@ scelta prudente.
 Nel frattempo, release v0.1.0 pubblicata (tag + GitHub Release), PR
 #30 aperta verso develop, README aggiornato con stato validato e
 roadmap collegata alle issue.
+
+Addendum (da Daniele): qualunque modifica successiva fatta dalla
+webGUI **rimuove silenziosamente `vhv.enable = "TRUE"`** dal `.vmx` —
+Broadcom non permette la combinazione VHV+passthrough e la GUI la
+"corregge" senza avvisare. Contromisura in checklist: dopo ogni
+modifica GUI su una VM con GPU condivisa + nested VT-x, ri-grep del
+`.vmx` (vhv.enable / vhv.allowPassthru) e `kvm-ok` nella guest prima
+di fidarsi. Sintomo a valle: /dev/kvm sparito, VM annidate in TCG.
