@@ -132,3 +132,70 @@ Issue collegate aperte su richiesta di Daniele durante la sessione:
 #10 (runner self-hosted per la non-regressione hardware, sub-issue di
 #5) e #11-#14 (lifecycle Dev→Staging→Prod, issue autonoma con tre
 sub-issue).
+
+## 2026-08-30 — Esito del run di controllo (variante B) e bug 33
+
+**Esito del run di controllo** (answer file senza DriverPaths,
+consegnato via CD-ROM, boot pulito automatico): la fase 1
+dell'installazione è arrivata fino in fondo — "Copying Windows Server
+files ✓" e "Getting files ready" osservata dal 15% al 73% e oltre —
+e la macchina **ha riavviato da sola** a fase completata. Primo run
+nella storia del progetto in cui Windows Setup completa la fase WinPE
+in modo completamente non presidiato.
+
+**Bug 33 — il riavvio di metà installazione veniva reinterpretato
+come nuovo tentativo di install, distruggendo il disco appena
+scritto.** Colto DAL VIVO: al riavvio la VM è tornata in PXE (il boot
+order resta network-first durante il provisioning, by design) con lo
+stato ancora "installing", e il dispatch ha servito di nuovo
+l'installer come "attempt 2" (evento nella history alle 07:55:55) —
+il cui diskpart avrebbe ripulito il disco con l'installazione a metà.
+VM fermata a mano in extremis. La differenza strutturale col percorso
+Ubuntu: autoinstall POSTa "installed" PRIMA di riavviare, Windows lo
+riporta solo nel pass specialize, DOPO il primo boot dal disco — un
+boot PXE durante "installing" è quindi la normale continuazione per
+Windows, un fallimento per Linux.
+
+**Fix** (`compose/state-service/app.py`): per un host con
+`os_family == windows` in stato `installing` e almeno un dispatch già
+avvenuto, un boot PXE riceve boot-local ("mid-install reboot,
+continuing from local disk"), con contatore limitato
+(`FORGE_WINDOWS_MID_INSTALL_LOCAL_BOOTS`, default 3) così
+un'installazione davvero morta ricade comunque sul retry/park. Il
+controllo sta PRIMA della guardia sul limite tentativi (il riavvio
+dell'ultimo tentativo consentito deve comunque bootare locale). La
+fixture di test del registry è stata allineata al registry reale
+(che porta `os_family`); quattro test nuovi coprono boot-local,
+limite, invarianza del comportamento Linux e reset del contatore.
+Container `forge-state` ricostruito e riavviato col fix. 211/211
+test verdi.
+
+**Fix minori nel giro**: il task di staging della cartella driver
+piatta girava sotto `sh` (`set -o pipefail` → "Illegal option") per
+un `executable: /bin/bash` dimenticato — la stessa convenzione
+stabilita al bug 24, beccata dal run reale; e la QUINTA occorrenza
+del `--` letterale in un commento XML (nel commento che spiegava la
+rimozione di DriverPaths!), beccata stavolta dai rendering test in
+minuti.
+
+## 2026-08-30 — Run definitivo end-to-end (in corso)
+
+Precondizioni verificate una per una prima del lancio: cartella
+`forge-install-drivers` con 6 .inf sulla share virtio; startnet.cmd
+servito con `/InstallDrivers`; Autounattend servito senza blocco
+DriverPaths (l'unica occorrenza è il commento esplicativo); ISO
+unattend reale ripristinata nella config persistente del dominio
+(dopo i change-media di test); winmedia riavviata preventivamente e
+verificata; state-service col fix bug 33 attivo.
+
+Lanciato `make provision-windows` completo. Catena attesa: PXE →
+winpeshl.ini → startnet (driver, rete, SMB, diskpart) →
+`sources\setup.exe /InstallDrivers J:\forge-install-drivers` → fase 1
+→ riavvio → **boot local via fix 33** → specialize (driver presenti →
+rete → download SetupComplete → stato `installed`) → SetupComplete →
+`configuring` → WinRM. Esito nel prossimo aggiornamento.
+
+Issue aggiuntive aperte su richiesta di Daniele durante l'attesa:
+#15-#19 e #24-#25 (asset-inventory dims.db, 6 fasi), #20-#23
+(secrets-vault + CA interna), #26-#29 (control plane multi-nodo con
+API e CLI `dims`).
