@@ -94,6 +94,18 @@ rem    error: The operation is not allowed on a disk that is
 rem    offline."), confirmed on a real rerun in this environment. Both
 rem    commands are harmless no-ops on a disk that is already online
 rem    and writable.
+rem
+rem    The NTFS volume created and lettered below is the bug 32 fix
+rem    (docs/logbook/06-fase6-provisioning-windows.md): setup.exe run
+rem    from WinPE puts its working set ($WINDOWS.~BT, and the Panther
+rem    logs that were never found) on a writable LOCAL NTFS volume,
+rem    never on the X: RAM disk -- and this environment's install
+rem    source is a deliberately read-only SMB share, so after a bare
+rem    clean/convert there was nowhere writable at all and Setup died
+rem    with 0xC190011F before it could even write the log saying so.
+rem    The answer file's DiskConfiguration (WillWipeDisk=true) replaces
+rem    this scratch layout with the real ESP/MSR/Windows one anyway,
+rem    so nothing here needs to match it.
 rem -------------------------------------------------------------------
 echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
 (
@@ -102,19 +114,12 @@ echo [4/6] Preparing disk 0... & echo [4/6] diskpart >> "%FORGE_LOG%"
   echo attributes disk clear readonly
   echo clean
   echo convert gpt
+  echo create partition primary
+  echo format fs=ntfs quick label=FORGESCRATCH
+  echo assign letter=C
   echo rescan
 ) > X:\forge-diskpart.txt
 diskpart /s X:\forge-diskpart.txt >> "%FORGE_LOG%" 2>&1
-rem bug 32 (docs/logbook/06-fase6-provisioning-windows.md): setup.exe
-rem launched immediately after "clean"/"convert gpt" consistently failed
-rem with 0xC190011F, before ever writing setupact.log, while the exact
-rem same setup.exe invocation launched by hand minutes later on the
-rem same disk succeeded and reached the interactive GUI -- a race
-rem between diskpart's disk operations and Setup's own disk
-rem enumeration, not an answer-file problem (confirmed separately by
-rem testing with no answer file at all). "rescan" forces diskpart to
-rem re-enumerate synchronously before this script continues, so Setup
-rem never sees a disk mid-transition.
 timeout /t 5 /nobreak >nul
 
 rem -------------------------------------------------------------------
