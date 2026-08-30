@@ -1,0 +1,25 @@
+; =====================================================================
+; FORGE-AI :: WinPE shell configuration for {{ host.name }}
+; Injected into \Windows\System32\winpeshl.ini by wimboot.
+; Rendered from ansible/templates/windows/winpeshl.ini.j2
+; =====================================================================
+; This file is the resolution of bugs 28 and 32 together
+; (docs/logbook/06-fase6-provisioning-windows.md): winpeshl.exe's
+; documented default, when no winpeshl.ini exists, is to launch
+; X:\sources\setup.exe if present -- which is why the boot.wim "Setup"
+; image (index 2) skipped startnet.cmd entirely (bug 28). Switching to
+; the plain WinPE image (index 1) made startnet.cmd run, but that image
+; ships without Setup's runtime modules, so setup.exe launched from it
+; died while applying the answer file's windowsPE pass -- first as
+; E_INVALIDARG on PathAndCredentials with "name in handler = 0" (no
+; handler present), then, with DriverPaths removed, as 0x8007007E
+; ERROR_MOD_NOT_FOUND (bug 32, both confirmed in
+; X:\Windows\Panther\setuperr.log once sources\setup.exe finally
+; produced logs). The fix: boot the Setup image for its full runtime,
+; and use this file to point winpeshl at startnet.cmd anyway -- the
+; same mechanism MDT boot images use.
+;
+; startnet.cmd calls wpeinit itself, as required when winpeshl.ini
+; overrides the default shell.
+[LaunchApps]
+%SYSTEMROOT%\System32\cmd.exe, "/c startnet.cmd"

@@ -89,26 +89,28 @@
 
 - name: Find the WinPE image index inside boot.wim
   # A Windows installation boot.wim holds two images: index 1 is
-  # "Microsoft Windows PE", index 2 is "Microsoft Windows Setup". Bug 28
-  # (docs/logbook/06-fase6-provisioning-windows.md): the Setup image's
-  # own WIM metadata carries "Boot Index: 2", which is what tells
-  # wimboot which image to mount as X:\ -- and the Setup image has no
-  # \Windows\System32\winpeshl.ini at all, confirmed on a live console
-  # via Shift+F10 during Setup. Without winpeshl.ini, X:\sources\setup.exe
-  # is what actually runs, and startnet.cmd -- however correctly staged
-  # -- never executes: no forge-ai.log is ever created, drvload never
-  # runs, and Setup reaches its disk-selection screen with no storage
-  # driver loaded ("Install driver to show hardware"). The plain
-  # "Microsoft Windows PE" image (index 1) is the one whose normal boot
-  # path runs winpeshl.ini/startnet.cmd, so that is the one that must
-  # both receive the drivers and become the WIM's boot index -- ending,
-  # as before, with startnet.cmd itself launching setup.exe from the
-  # mapped network share as its last step.
+  # "Microsoft Windows PE", index 2 is "Microsoft Windows Setup". The
+  # SETUP image is the right one, for two reasons learned the hard way
+  # (bugs 28 and 32, docs/logbook/06-fase6-provisioning-windows.md):
+  #
+  #   * only the Setup image carries Setup's own runtime under
+  #     X:\sources (the plain PE image has an empty sources tree,
+  #     confirmed on a live console). setup.exe launched from the plain
+  #     image dies while applying the answer file's windowsPE pass --
+  #     E_INVALIDARG on PathAndCredentials with "name in handler = 0"
+  #     (no handler), and 0x8007007E ERROR_MOD_NOT_FOUND with
+  #     DriverPaths removed -- both read out of setuperr.log.
+  #
+  #   * the Setup image ships no winpeshl.ini, and winpeshl.exe's
+  #     documented fallback launches X:\sources\setup.exe directly,
+  #     which is why startnet.cmd never ran there (bug 28). That is
+  #     cured by injecting a winpeshl.ini via wimboot (see
+  #     windows/winpeshl.ini.j2), NOT by switching to the other image.
   ansible.builtin.shell:
     cmd: |
       set -o pipefail
       wimlib-imagex info "{{ storage.http_root }}/windows/boot-forge.wim" \
-        | awk '/^Index:/{idx=$2} /^Name:/{ if ($0 !~ /Setup/) { print idx; exit } }'
+        | awk '/^Index:/{idx=$2} /^Name:/{ if ($0 ~ /Setup/) { print idx; exit } }'
     executable: /bin/bash
   become: true
   changed_when: false
@@ -117,16 +119,16 @@
 
 - name: Select the WinPE image index
   ansible.builtin.set_fact:
-    forge_winpe_image_index: "{{ forge_winpe_index.stdout | trim | default('1', true) or '1' }}"
+    forge_winpe_image_index: "{{ forge_winpe_index.stdout | trim | default('2', true) or '2' }}"
   tags: [windows, media]
 
 - name: Report the selected WinPE image
   ansible.builtin.debug:
     msg: >-
       Injecting drivers into boot.wim image index {{ forge_winpe_image_index }}
-      (the plain WinPE image, whose boot path runs startnet.cmd -- not
-      the Setup image, which launches setup.exe directly and never
-      touches startnet.cmd; see bug 28 in the logbook).
+      (the Setup image: the only one carrying Setup's runtime modules.
+      startnet.cmd still runs there thanks to the injected winpeshl.ini
+      -- see bugs 28/32 in the logbook).
   tags: [windows, media]
 
 - name: Inject the VirtIO drivers into the WinPE image  # noqa: no-handler

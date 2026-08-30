@@ -169,10 +169,14 @@ rem itself, not yet understood, leaves the disk ready for the next one.
 rem A bounded retry is the pragmatic fix: if Setup actually succeeds it
 rem reboots the machine and none of this runs again anyway, so retrying
 rem unconditionally on any non-reboot return is safe.
+rem sources\setup.exe directly, not the stub at the media root: the
+rem stub swallows both the error dialog and the Panther logs (bug 32's
+rem diagnosis was blind for days until the direct binary produced
+rem setuperr.log on the first try). Same choice MDT makes.
 set FORGE_SETUP_TRIES=0
 :setup_retry
 set /a FORGE_SETUP_TRIES+=1
-%FORGE_SRC%\setup.exe
+%FORGE_SRC%\sources\setup.exe
 set FORGE_SETUP_RC=%errorlevel%
 echo       setup.exe attempt %FORGE_SETUP_TRIES% returned errorlevel %FORGE_SETUP_RC% >> "%FORGE_LOG%"
 if %FORGE_SETUP_TRIES% lss 3 (

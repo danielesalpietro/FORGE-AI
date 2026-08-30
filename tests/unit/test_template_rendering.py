@@ -46,6 +46,7 @@ PER_HOST_TEMPLATES = [
     ("windows/SetupComplete.cmd.j2", "windows"),
     ("windows/Configure-WinRM.ps1.j2", "windows"),
     ("windows/startnet.cmd.j2", "windows"),
+    ("windows/winpeshl.ini.j2", "windows"),
     ("ipxe/host-windows-install.ipxe.j2", "windows"),
 ]
 

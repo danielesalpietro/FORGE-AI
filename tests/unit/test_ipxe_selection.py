@@ -352,6 +352,10 @@ def test_windows_install_script_fetches_the_wimboot_file_set(jinja_env, base_con
     assert "startnet.cmd" in script
 
     fetch_lines = [line for line in script.splitlines() if line.strip().startswith("imgfetch")]
+    assert any("winpeshl.ini" in line for line in fetch_lines), (
+        "without an injected winpeshl.ini the Setup image launches "
+        "X:\\sources\\setup.exe directly and startnet.cmd never runs (bug 28/32)"
+    )
     assert not any("Autounattend.xml" in line for line in fetch_lines), (
         "the answer file travels on a separate CD-ROM, not through wimboot injection"
     )
