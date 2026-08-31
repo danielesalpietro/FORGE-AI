@@ -553,3 +553,71 @@ scelta prudente). Attivarla accende un'automazione permanente: la
 decisione spetta a Daniele dal vivo, non a una sessione schedulata —
 il classificatore di sicurezza ha bloccato il tentativo e aveva
 ragione lui.
+
+## 2026-08-31 — Route attivate su consenso dal vivo; l'anello arriva fino ad Ansible sui target; bug 45 (il vault che Semaphore non ha mai avuto)
+
+Daniele ha dato il via dal vivo ("riprova") all'attivazione di
+FORGE_TEMPLATE_ROUTES (docs/**→null, *.md→null, LICENSE→null,
+**→template 10 "Validate deployment" — la mappatura raccomandata dal
+ruolo stesso). Da lì, scavo strato per strato — ogni fix verificato
+con una consegna di test reale:
+
+1. Il receiver non aveva mai avuto SEMAPHORE_API_TOKEN /
+   SEMAPHORE_PROJECT_ID (coerente: nessuno era mai arrivato fin lì).
+   Token creato via API, .env aggiornato → "semaphore accepted
+   template 10 (HTTP 201)": **primo task Semaphore mai lanciato dal
+   webhook nella storia del PoC**.
+2. Task 1: clone fallito ("bad boolean GIT_TERMINAL_PROMPT '0\n'") —
+   il repository usava la chiave "None" (nessuna credenziale) e Gitea
+   esige il sign-in. Creato token Gitea read:repository dedicato,
+   chiave login/password in Semaphore, repository agganciato.
+3. Task 2: "access key type not supported for ansible user" —
+   l'inventory usava la chiave SSH anche come become key; become →
+   None (l'automation user è NOPASSWD).
+4. Task 3: ruoli non trovati — Semaphore lancia dalla radice del
+   clone e l'ansible.cfg vive in ansible/. Fix per tutti i template:
+   ANSIBLE_CONFIG=ansible/ansible.cfg nell'environment "poc".
+5. Task 4: l'inventory dinamico vuole jsonschema, assente
+   nell'immagine Semaphore → pip nel container (EFFIMERO: da portare
+   in un'immagine custom).
+6. Task 5: poc-ubuntu-01 unreachable — vero! Le VM annidate erano
+   spente dal lavoro GPU. Riaccese.
+7. Task 6: **poc-ubuntu-01 ok=6, tutto verde via Semaphore** — la
+   metà Linux dell'anello GitOps funziona per la prima volta
+   end-to-end: push → mirror → webhook → Semaphore → Ansible →
+   servizi validati sul target.
+8. poc-windows-01: "ntlm: credentials rejected". Qui una lunga caccia
+   (vault key agganciata al template — mancava, altro gap di
+   riconciliazione; upgrade pyspnego; scalata ansible-core
+   2.17/2.18/2.19 nel venv del runner; il 2.19 ha pure stanato
+   l'incompatibilità del callback community.general.yaml del bundle
+   9.4.0 — quello del deprecation warning storico). Tutte piste
+   sbagliate, ripristinate. La verità l'ha detta un sitecustomize
+   che logga tipo/lunghezza/sha1 di ciò che arriva a pyspnego:
+   **password diverse nei due percorsi** (10 caratteri dal clone, 24
+   dal host).
+
+**Bug 45 — la radice**: `vault.yml` è host-local e gitignorato (igiene
+corretta), ma in group_vars/all/ è committato `vault.example.yml`,
+che il clone di Semaphore carica come fosse vero: le run Semaphore
+hanno sempre usato **le credenziali demo dell'esempio** — fallimento
+silenzioso con password plausibile ma sbagliata, il peggior modo di
+fallire. Sul host caricano entrambi e l'ordine alfabetico fa vincere
+il vault vero. Il venv del runner è stato riportato allo stato
+originale (2.16.12/pyspnego 0.11.1; resta solo jsonschema, necessario).
+
+Decisione da prendere (opzioni per Daniele):
+- **E (raccomandata comunque)**: togliere vault.example.yml da
+  group_vars (spostarlo in docs o rinominarlo fuori dal glob) — il
+  fallback silenzioso su segreti demo è una trappola a prescindere;
+  senza, il run Semaphore fallirebbe FORTE con "undefined variable".
+- **A**: committare vault.yml cifrato nel repo (prassi comune; il
+  segreto è la vault password, già nel Key Store di Semaphore come
+  forge-ai-vault). Da pesare: il repo è pubblico.
+- **D**: iniettare i segreti come environment secret di Semaphore e
+  fare fallback env→vault nelle group_vars.
+
+Stato macchina a fine sessione: route ATTIVE (ogni push non-docs su
+develop lancia "Validate deployment"), che con bug 45 aperto significa
+task rossi sul lato Windows: accettabile a breve, da chiudere con la
+decisione sopra.
