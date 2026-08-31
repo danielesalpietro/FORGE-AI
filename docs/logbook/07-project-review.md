@@ -483,3 +483,25 @@ Broadcom non permette la combinazione VHV+passthrough e la GUI la
 modifica GUI su una VM con GPU condivisa + nested VT-x, ri-grep del
 `.vmx` (vhv.enable / vhv.allowPassthru) e `kvm-ok` nella guest prima
 di fidarsi. Sintomo a valle: /dev/kvm sparito, VM annidate in TCG.
+
+## 2026-08-31 — La palestra GPU convalidata sotto carico AI reale
+
+Bench comparativo a tre GPU con la stessa build llama.cpp (container
+CUDA ufficiale) e lo stesso Qwen2.5-7B Q4_K_M: GTX 1060 dentro
+forge-poc-host (VM ESXi, passthrough), RTX 3090 e RTX 5060 Ti bare
+metal su berlin-3eie (Z8 G4, progetto kickstart-berlin). Risultati
+completi e riproducibilità: kickstart-berlin#58 (commento del
+2026-08-31); clpeak, NVENC e potenze incluse.
+
+Fatti rilevanti per FORGE-AI:
+- **Il passthrough ESXi costa ~zero anche sotto carico AI reale**
+  (1060 in VM: 24 t/s in generazione a 120 W, in linea con la sua
+  classe su bare metal). La config vhv+MMIO regge lo stress.
+- forge-poc-host ora ha docker + nvidia-container-toolkit (installati
+  per il bench) e la root LV estesa a 58 GB (i 29 GB liberi del VG).
+- Verificato dal ferro: la Z8 G4 è PCIe 3.0 (gen.max=3 su entrambe le
+  GPU; la 5060 Ti è x8 fisica → Gen3 x8 ≈ 7.9 GB/s di transfer).
+- Incidente di percorso, rimediato subito: un pattern herestring
+  sbagliato ha scritto per pochi secondi la password sudo in un file
+  sources.list su forge-poc-host; file riscritto e verificato pulito
+  col grep. Pattern abbandonato (echo | sudo -S d'ora in poi).
