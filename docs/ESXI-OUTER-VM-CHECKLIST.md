@@ -22,9 +22,11 @@ controllo mirato sui punti che hanno già causato perdite di tempo.
 - [ ] Usare invece l'upload HTTPS diretto al datastore (lo stesso
       meccanismo del browser datastore del client vSphere):
 
+      ```bash
       curl -k -T <file-locale> \
         "https://<host-esxi>/folder/<sottocartella>/<nome-file>?dcPath=ha-datacenter&dsName=<datastore>" \
         -u "root:<password>"
+      ```
 
       Verificato più stabile (~35MB/s sostenuti) e completato senza
       errori dove due tentativi via SCP erano falliti.
@@ -128,12 +130,14 @@ sono i valori **letti dal file reale** funzionante:
       confermato due volte in questa sessione, con due ISO seed
       diverse). Usare invece lo shorthand ufficiale:
 
+      ```yaml
       storage:
         layout:
           name: lvm
           match:
             size: smallest
           sizing-policy: all
+      ```
 
 - [ ] Senza `sizing-policy: all`, Subiquity lascia la logical volume di
       root più piccola della partizione LVM che la contiene (verificato:

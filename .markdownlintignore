@@ -1,0 +1,7 @@
+# The logbook is the verbatim field-notes record of what happened on
+# real hardware, written hot during the sessions it describes. Its
+# value is historical fidelity, not style: restyling ~150 indented
+# blocks across eight files to satisfy MD046 would churn the record
+# for zero informational gain. Everything else in docs/ stays linted.
+docs/logbook/
+node_modules/
