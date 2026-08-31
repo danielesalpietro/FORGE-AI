@@ -505,3 +505,51 @@ Fatti rilevanti per FORGE-AI:
   sbagliato ha scritto per pochi secondi la password sudo in un file
   sources.list su forge-poc-host; file riscritto e verificato pulito
   col grep. Pattern abbandonato (echo | sudo -S d'ora in poi).
+
+## 2026-08-31 — L'anello GitOps si chiude per la prima volta (bug 43-44: branch gates e SSRF allow-list)
+
+Decisione di Daniele (opzione A, via Supervisor): agganciare tutta la
+catena automatica a `develop`; `main` come branch di rilascio arriverà
+con la #11. Esecuzione e scoperte:
+
+**Bug 43 — quattro cancelli, tutti su un branch inesistente.** Il
+`default_branch: main` in `config/defaults.yml`, mai sovrascritto,
+governava: (1) il branch filter dell'hook Gitea, (2) il
+`default_branch` del repo in Gitea, (3) `semaphore_repo_branch`,
+(4) `FORGE_ALLOWED_BRANCH` del receiver. `main` non esiste su GitHub:
+l'anello non si era MAI chiuso — verificato nei log Gitea ("Branch
+'develop' doesn't match branch filter 'main', skipping"). Fix:
+`gitops.default_branch: develop` in `config/poc.yml` (host) +
+`GITOPS_DEFAULT_BRANCH=develop` in `.env`, rerun dei ruoli con
+`--tags gitops`, container webhook ricreato.
+
+**Lacuna di riconciliazione nei ruoli** (da sistemare): con l'hook e
+il repository Semaphore GIÀ esistenti, `gitea_config` e
+`semaphore_config` non ne correggono la configurazione (changed=0,
+filtro rimasto `main`). Corretti al volo via API (PATCH hook Gitea,
+PUT repository Semaphore) — i ruoli andranno resi riconcilianti.
+
+**Bug 44 — la guardia SSRF di Gitea mangiava le consegne.** Rimosso
+il filtro branch, è emerso lo strato sotto: "webhook can only call
+allowed HTTP servers ... deny 'webhook(172.28.240.6:8000)'" — Gitea
+rifiuta webhook verso indirizzi privati salvo allow-list. Era
+invisibile da sempre perché il branch filter scartava prima. Fix nel
+compose: `GITEA__webhook__ALLOWED_HOST_LIST: webhook` (solo il
+receiver, superficie minima).
+
+**Verifica end-to-end**: commit di test su develop (a169d5f, vuoto)
+→ push GitHub → mirror-sync → hook Gitea consegna → forge-webhook:
+"push to develop ... matched catch-all route -> template None",
+HTTP 202, firma HMAC verificata. La catena
+GitHub→Gitea→webhook→routing funziona per la prima volta nella
+storia del PoC.
+
+**Ultimo interruttore, lasciato spento di proposito**: le route
+verso Semaphore (`FORGE_TEMPLATE_ROUTES` vuota → "riconosci, non
+eseguire", per design). La riga raccomandata dal ruolo stesso è
+`FORGE_TEMPLATE_ROUTES=[["docs/**", null], ["*.md", null],
+["LICENSE", null], ["**", 10]]` (template 10 = Validate deployment,
+scelta prudente). Attivarla accende un'automazione permanente: la
+decisione spetta a Daniele dal vivo, non a una sessione schedulata —
+il classificatore di sicurezza ha bloccato il tentativo e aveva
+ragione lui.
