@@ -104,6 +104,14 @@ services:
       GITEA__service__ENABLE_BASIC_AUTHENTICATION: "true"
       GITEA__openid__ENABLE_OPENID_SIGNIN: "false"
       GITEA__repository__DEFAULT_BRANCH: ${GITOPS_DEFAULT_BRANCH:-main}
+      # Gitea's SSRF guard refuses webhook deliveries to private
+      # addresses by default, which silently killed the push webhook to
+      # the internal receiver (observed live 2026-08-31: "webhook can
+      # only call allowed HTTP servers ... deny 'webhook(...)'" in the
+      # gitea log -- masked until then by the branch-filter bug, see
+      # docs/logbook/07-project-review.md). Allow exactly the receiver
+      # service and nothing else.
+      GITEA__webhook__ALLOWED_HOST_LIST: webhook
       GITEA__mirror__ENABLED: "true"
       GITEA__mirror__DEFAULT_INTERVAL: ${GITEA_MIRROR_INTERVAL:-10m}
       GITEA__mirror__MIN_INTERVAL: 5m
