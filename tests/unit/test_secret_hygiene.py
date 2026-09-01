@@ -107,8 +107,8 @@ def test_no_vault_file_is_tracked(tracked):
 
 
 def test_the_vault_example_is_tracked_and_holds_only_placeholders(tracked_text):
-    examples = [(p, t) for p, t in tracked_text if p.name == "vault.example.yml"]
-    assert examples, "vault.example.yml must exist so operators know what to fill in"
+    examples = [(p, t) for p, t in tracked_text if p.name == "vault.yml.example"]
+    assert examples, "vault.yml.example must exist so operators know what to fill in"
 
     for path, text in examples:
         for line in text.splitlines():
@@ -278,7 +278,7 @@ def test_gitignore_covers_the_sensitive_paths(path):
     [
         "config/poc.example.yml",
         "compose/.env.example",
-        "ansible/inventories/poc/group_vars/all/vault.example.yml",
+        "ansible/inventories/poc/group_vars/all/vault.yml.example",
         "ansible/templates/windows/Autounattend.xml.j2",
         "ansible/templates/ubuntu/user-data.j2",
     ],
