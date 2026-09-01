@@ -7,13 +7,20 @@
 #   ./bootstrap/create-secrets.sh --tls-only     just the proxy certificate
 #   ./bootstrap/create-secrets.sh --show         print what exists, no values
 #
-# Produces, all git-ignored and mode 0600:
+# Produces, all mode 0600:
 #
-#   compose/.env                                 control-plane credentials
-#   ansible/inventories/poc/group_vars/all/vault.yml   encrypted vault
-#   .vault-password                              the vault password
-#   ~/.ssh/forge-ai-poc{,.pub}                   SSH key for the Linux targets
-#   compose/nginx/tls/forge-ai.{crt,key}         proxy TLS pair
+#   compose/.env                                 control-plane credentials (git-ignored)
+#   ansible/inventories/poc/group_vars/all/vault.yml   encrypted vault (COMMITTED -- see below)
+#   .vault-password                              the vault password (git-ignored, NEVER commit this)
+#   ~/.ssh/forge-ai-poc{,.pub}                   SSH key for the Linux targets (git-ignored)
+#   compose/nginx/tls/forge-ai.{crt,key}         proxy TLS pair (git-ignored)
+#
+# vault.yml is the one exception to "git-ignored": it is meant to be
+# `git add`ed and committed, encrypted at rest, so Semaphore's clone
+# from Gitea has the same real secrets the host does instead of
+# silently falling back to vault.yml.example's placeholders (bug 45,
+# docs/SECURITY.md). Nothing in this script commits it automatically --
+# that stays a deliberate, manual step.
 #
 # It NEVER overwrites an existing secret without --force. Regenerating
 # SEMAPHORE_ACCESS_KEY_ENCRYPTION, for example, makes every key already
@@ -458,7 +465,9 @@ show_status() {
     done
 
     printf '\n' >&2
-    log_dim "None of these files is tracked by Git; .gitignore and"
+    log_dim "$(basename "$VAULT_FILE") is meant to be committed, encrypted, once"
+    log_dim "it holds real values (git add + commit -- not automatic). Every"
+    log_dim "other file above must never be tracked; .gitignore and"
     log_dim ".github/workflows/security.yml both enforce that independently."
 }
 
