@@ -621,3 +621,48 @@ Stato macchina a fine sessione: route ATTIVE (ogni push non-docs su
 develop lancia "Validate deployment"), che con bug 45 aperto significa
 task rossi sul lato Windows: accettabile a breve, da chiudere con la
 decisione sopra.
+
+## 2026-09-01 — Opzione A: scaffolding verificato, vault reale NON pubblicato (serve un via libera dal vivo)
+
+Task schedulato (via Supervisor) per eseguire la decisione di Daniele su
+#33: committare `vault.yml` cifrato. Verifica dello stato reale prima di
+agire, come impone CLAUDE.md — tutto confermato:
+
+- **Rename dell'esempio: realmente atterrato** su `develop`
+  (`vault.yml.example`, fuori dal glob di autoload; `vault.example.yml`
+  non esiste più). Il bug 45 non ha più il fallback silenzioso.
+- **PR #39** aperta, 6 file di solo scaffolding, nessun segreto: il
+  `.gitignore` non esclude più il vault designato, e il gate CI
+  "Reject an unencrypted or committed vault" accetta il vault solo a
+  quel path e solo se cifrato, rifiuta qualunque altro `vault.yml` e
+  sempre `.vault-password`. Costruzione solida.
+- **Vault sull'host**: cifrato `ANSIBLE_VAULT;1.1;AES256`, decifra
+  correttamente, contiene 10 segreti (password admin Windows e Ubuntu +
+  hash, admin Gitea e Semaphore, token API Gitea/Semaphore, webhook
+  secret, state token, path della chiave SSH).
+- **Password del vault: 48 caratteri casuali** (~288 bit). È il dato
+  che cambia il quadro di rischio: l'obiezione crittografica della peer
+  review (PBKDF2 a 10k iterazioni, debole) morde solo su password
+  indovinabili. Con questa, il ciphertext pubblico è opaco in pratica.
+- Repo host pulito, `.vault-password` non tracciato, vault non ancora
+  tracciato.
+
+**Cosa NON è stato fatto, deliberatamente**: il commit e il push del
+vault. Pubblicare su un repository **pubblico** un pacchetto di
+credenziali reali dell'infrastruttura è irreversibile (fork, mirror,
+cache: il rewrite della history non recupera nulla) e verso l'esterno.
+Un task schedulato non è consenso dal vivo — lo dice il task stesso —
+e questa è esattamente la classe di azione che richiede un sì esplicito
+di Daniele nel momento. Non è un dissenso sulla decisione: l'opzione A
+con una password da 288 bit è difendibile, e lo scaffolding è pronto.
+
+**Cosa serve per chiudere** (un comando, sull'host, dopo il merge di
+#39): `git add ansible/inventories/poc/group_vars/all/vault.yml`,
+commit, push; poi una run Semaphore reale che dimostri che il clone di
+Gitea decifra il vault vero invece dei placeholder, e la chiusura di
+#33. Raccomandazione operativa che resta valida: prima di rendere
+pubblico il ciphertext, valutare la rotazione dei segreti che
+proteggono sistemi condivisi — il ciphertext pubblicato è per sempre,
+e la sua sicurezza dipende interamente dal fatto che quella password
+da 48 caratteri non esca mai (vive in `.vault-password` sull'host e nel
+Key Store di Semaphore come `forge-ai-vault`).
