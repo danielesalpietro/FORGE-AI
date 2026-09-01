@@ -118,7 +118,7 @@ jobs:
           # The inverse failure: over-broad .gitignore rules that also
           # exclude the templates and examples operators need.
           for path in compose/.env.example config/poc.example.yml \
-                      ansible/inventories/poc/group_vars/all/vault.example.yml \
+                      ansible/inventories/poc/group_vars/all/vault.yml.example \
                       ansible/templates/windows/Autounattend.xml.j2 \
                       ansible/templates/ubuntu/user-data.j2; do
             git ls-files --error-unmatch "$path" >/dev/null 2>&1 || {
