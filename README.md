@@ -331,6 +331,10 @@ Hardening items that stay on the list independently of the phases:
 | [COMPATIBILITY.md](docs/COMPATIBILITY.md) | Exactly what was tested |
 | [REFERENCES.md](docs/REFERENCES.md) | The official sources, and what each settled |
 
+The [GitHub wiki](https://github.com/danielesalpietro/FORGE-AI/wiki) is a
+map of all of this for a first-time reader; its pages are written and
+reviewed in [docs/wiki/](docs/wiki/), then published.
+
 ---
 
 ## Contributing
