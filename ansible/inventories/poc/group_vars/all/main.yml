@@ -55,7 +55,7 @@ forge_wait_poll_interval: 15
 # Secrets
 # ---------------------------------------------------------------------
 # Real values live in group_vars/all/vault.yml (Ansible Vault, git
-# ignored) or in the Semaphore Key Store. See vault.example.yml.
+# ignored) or in the Semaphore Key Store. See vault.yml.example.
 # Declared here as empty so a missing vault produces a clear failure in
 # validate-prerequisites.yml rather than an undefined-variable crash
 # three playbooks later.
