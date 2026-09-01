@@ -1,0 +1,28 @@
+title = "FORGE-AI gitleaks config"
+
+[extend]
+useDefault = true
+
+# The upstream curl-auth-user rule's own bundled allowlist only covers
+# <user>:<pass> or <user:pass> placeholder shapes (see gitleaks'
+# config/gitleaks.toml, rules.curl-auth-user.allowlists). It does not
+# cover a literal known username with a bracketed placeholder for the
+# password only -- docs/ESXI-OUTER-VM-CHECKLIST.md's
+# `-u "root:<password>"` in a datastore-upload example -- which is why
+# it still flags as a "leak" despite being a documented placeholder,
+# not a credential. Scoped as narrowly as gitleaks allows: this exact
+# match, in this exact file, via an AND condition (both must match),
+# not a path- or regex-only allowlist that would be broader than
+# intended. Verified locally against gitleaks 8.24.3 (the version this
+# repo's CI pins) before committing: this allowlist suppresses only
+# the one finding it targets -- the same pattern in another file, and
+# an unrelated real-looking credential, both still get flagged.
+[[rules]]
+id = "curl-auth-user"
+
+    [[rules.allowlists]]
+    description = "ESXi datastore upload example: root:<password> is a documented placeholder, not a credential"
+    condition = "AND"
+    regexTarget = "match"
+    regexes = ['''-u\s+"root:<password>"''']
+    paths = ['''docs/ESXI-OUTER-VM-CHECKLIST\.md''']
