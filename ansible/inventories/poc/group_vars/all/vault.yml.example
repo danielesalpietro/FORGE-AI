@@ -13,7 +13,7 @@
 #
 # Or by hand:
 #
-#   cp vault.example.yml vault.yml
+#   cp vault.yml.example vault.yml
 #   $EDITOR vault.yml
 #   ansible-vault encrypt vault.yml
 #

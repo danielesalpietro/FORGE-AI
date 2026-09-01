@@ -21,7 +21,7 @@ compose/.env.*
 # Ansible Vault and generated vault material
 ansible/inventories/*/group_vars/all/vault.yml
 ansible/inventories/**/vault.yml
-!ansible/inventories/**/vault.example.yml
+!ansible/inventories/**/vault.yml.example
 .vault-password
 .vault_pass
 *.vault

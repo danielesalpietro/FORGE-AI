@@ -505,3 +505,50 @@ Fatti rilevanti per FORGE-AI:
   sbagliato ha scritto per pochi secondi la password sudo in un file
   sources.list su forge-poc-host; file riscritto e verificato pulito
   col grep. Pattern abbandonato (echo | sudo -S d'ora in poi).
+
+## 2026-09-01 — Issue #36 (bug 45, opzione E): rename completato dopo un self-report inesatto di un'altra sessione
+
+Issue #36 isolava la sola opzione E del bug 45 (vedi #33): rinominare
+`ansible/inventories/poc/group_vars/all/vault.example.yml` in
+`vault.yml.example` — stessa directory, ma un'estensione che il
+loader `group_vars/` di Ansible non riconosce (parsifica solo file
+senza estensione o `.yml`/`.yaml`/`.json`), così il file placeholder
+smette di essere caricato come fallback silenzioso al posto del vault
+vero. Lo scopo era volutamente ristretto per essere assegnabile a un
+coding agent: un rename, quattro riferimenti testuali da aggiornare,
+nessun accesso a hardware reale richiesto.
+
+**Un'altra sessione ha lavorato sul branch `fix/bug-45-vault-example-extension`
+e ha riportato "4 file su 5 completati"**, rename incluso. Verifica
+diretta sul branch remoto (non sul resoconto) prima di prendere
+qualunque decisione a valle: **il rename non era mai avvenuto**.
+`vault.example.yml` esisteva ancora al vecchio path, `vault.yml.example`
+non esisteva da nessuna parte. I tre commit realmente presenti
+(`.gitignore`, il commento in `main.yml`, `test_secret_hygiene.py`)
+puntavano tutti a un file inesistente — la suite, fatta girare su un
+worktree pulito del branch, confermava un fallimento reale:
+`test_the_vault_example_is_tracked_and_holds_only_placeholders` falliva
+con `assert []`. Il bug di sicurezza originale (fallback silenzioso
+sulle credenziali demo) era quindi ancora aperto, con in più un test
+rotto sopra — uno stato peggiore di quello di partenza, nonostante il
+self-report indicasse "quasi finito".
+
+**Completato qui**: il `git mv` mancante, l'ultimo riferimento rimasto
+(`.github/workflows/security.yml`, step "Confirm the examples ARE
+tracked" — bloccato nell'altra sessione da un problema di permessi sui
+file di workflow, dominio in cui GitHub App/OAuth token spesso non
+possono scrivere senza uno scope dedicato), e un test di non
+regressione aggiuntivo (`test_group_vars_all_has_no_other_ansible_loadable_file`)
+che asserisce che nessun futuro file in `group_vars/all/` possa
+ripetere lo stesso schema, oltre a `main.yml`. Verificato prima di
+committare, non assunto: suite unitaria completa (217 test, verde),
+`yamllint` e `ansible-lint --offline` (profilo production) entrambi
+puliti sul worktree del branch.
+
+**Lezione di metodo**: lo stesso principio che governa questa sessione
+da inizio campagna — un "completato" riportato da un'altra sessione
+(umana, Claude, o un agente automatizzato di terze parti) resta un
+resoconto, non un fatto, finché non è verificato contro lo stato reale
+del repository. Qui la verifica ha richiesto tre comandi (`git log`
+sul branch remoto, `git diff` contro la base, una run reale della
+suite) ed è bastata a evitare di dare per chiuso un lavoro non fatto.
