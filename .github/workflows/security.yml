@@ -84,24 +84,44 @@ jobs:
 
       - name: Reject an unencrypted or committed vault
         run: |
-          offenders=$(git ls-files | grep -E '(^|/)vault\.yml$|(^|/)\.vault-password$' || true)
-          if [ -n "$offenders" ]; then
-            echo "::error::an Ansible Vault file or its password is committed:"
-            echo "$offenders"
+          # The vault password must never be committed, from anywhere.
+          if git ls-files | grep -qE '(^|/)\.vault-password$'; then
+            echo "::error::the Ansible Vault password is committed"
             exit 1
           fi
-          # A vault payload anywhere at all means something was committed
-          # that should not have been.
+
+          # The vault itself IS meant to be tracked, encrypted, at
+          # exactly one path (docs/SECURITY.md, "Secrets: where each
+          # one lives"). A vault.yml anywhere else, or an Ansible Vault
+          # payload anywhere else, is a mistake -- not the real one.
           #
-          # The pattern is written with a character class so that THIS
-          # file does not contain the literal marker. A scanner that
-          # trips on itself gets an exclusion added, and the exclusion is
-          # what quietly weakens it later.
-          if git grep -lE '[$]ANSIBLE_VAUL[T];' 2>/dev/null; then
-            echo "::error::an Ansible Vault payload is present in a tracked file"
+          # The payload pattern is written with a character class so
+          # that THIS file does not contain the literal marker. A
+          # scanner that trips on itself gets an exclusion added, and
+          # the exclusion is what quietly weakens it later.
+          expected="ansible/inventories/poc/group_vars/all/vault.yml"
+          stray_vault=$(git ls-files | grep -E '(^|/)vault\.yml$' | grep -v -x "$expected" || true)
+          if [ -n "$stray_vault" ]; then
+            echo "::error::vault.yml committed outside its designated path:"
+            echo "$stray_vault"
             exit 1
           fi
-          echo "no vault material is tracked"
+          stray_payload=$(git grep -lE '[$]ANSIBLE_VAUL[T];' 2>/dev/null | grep -v -x "$expected" || true)
+          if [ -n "$stray_payload" ]; then
+            echo "::error::an Ansible Vault payload is present outside the designated vault:"
+            echo "$stray_payload"
+            exit 1
+          fi
+
+          if git ls-files --error-unmatch "$expected" >/dev/null 2>&1; then
+            if ! git grep -qE '[$]ANSIBLE_VAUL[T];' -- "$expected" 2>/dev/null; then
+              echo "::error file=$expected::tracked but not encrypted"
+              exit 1
+            fi
+            echo "the designated vault is tracked and encrypted; nothing else is"
+          else
+            echo "no vault material is tracked yet"
+          fi
 
       - name: Reject the operator's own files
         run: |

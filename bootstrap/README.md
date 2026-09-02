@@ -44,15 +44,15 @@ FORGE-AI runs its own instance bound only to the provisioning bridge.
 
 ## `create-secrets.sh`
 
-Generates, all mode `0600` and all git-ignored:
+Generates, all mode `0600`:
 
-| File | Contents |
-|---|---|
-| `compose/.env` | Control-plane credentials |
-| `ansible/inventories/poc/group_vars/all/vault.yml` | Encrypted Ansible Vault |
-| `.vault-password` | The vault password |
-| `~/.ssh/forge-ai-poc{,.pub}` | ed25519 key for the Linux targets |
-| `compose/nginx/tls/forge-ai.{crt,key}` | Self-signed proxy certificate |
+| File | Contents | Git |
+|---|---|---|
+| `compose/.env` | Control-plane credentials | ignored |
+| `ansible/inventories/poc/group_vars/all/vault.yml` | Encrypted Ansible Vault | **committed** (encrypted; see `docs/SECURITY.md`) |
+| `.vault-password` | The vault password | ignored, never commit |
+| `~/.ssh/forge-ai-poc{,.pub}` | ed25519 key for the Linux targets | ignored |
+| `compose/nginx/tls/forge-ai.{crt,key}` | Self-signed proxy certificate | ignored |
 
 The **mode is set before the content is written**
 (`install -m 0600 /dev/null`), so there is no window in which a secret
