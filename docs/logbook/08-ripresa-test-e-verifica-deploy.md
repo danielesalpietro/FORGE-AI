@@ -594,3 +594,88 @@ ognuno invisibile finché quello sopra non veniva rimosso. Il valore non
 è nei singoli fix, è che la catena di misura ora dice la verità — prima
 diceva `PASSED` su metà flotta, `FAILED` su host sani, e `changed` su
 task che non avevano fatto nulla.
+
+## Punto 3 — Il resolver dinamico in nginx (bug 46, rimedio strutturale)
+
+Il riavvio del proxy aveva risolto il sintomo; questo chiude la causa.
+
+`proxy_pass http://gitea:3000` con hostname **letterale** viene risolto
+da nginx una sola volta, al caricamento della configurazione, e
+l'indirizzo resta in cache per tutta la vita del worker. Compose assegna
+gli indirizzi da un pool, quindi ricreare un servizio può consegnare a
+un container un indirizzo diverso — e il proxy continua a parlare con
+chi ha ereditato il vecchio.
+
+Modifiche in `compose/nginx/proxy.conf`:
+
+- `resolver 127.0.0.11 valid=10s ipv6=off;` e `resolver_timeout 5s;` in
+  testa al file (DNS interno di Docker);
+- i tre `proxy_pass` passano per variabile — `set $forge_gitea
+  http://gitea:3000; proxy_pass $forge_gitea;` — che è ciò che obbliga
+  nginx a risolvere per richiesta invece che al caricamento.
+
+**Il caso del webhook meritava attenzione.** La forma originale era
+`proxy_pass http://webhook:8000/webhook;` dentro `location /webhook`:
+con una URI esplicita, nginx sostituisce il prefisso della location.
+Appena il `proxy_pass` contiene una variabile, quella sostituzione
+**smette di avvenire**, e la forma ingenua avrebbe mandato un `/webhook`
+secco per qualunque richiesta sotto quel prefisso. Usato invece
+`proxy_pass $forge_webhook$request_uri`, che riproduce la mappatura
+identità, query string inclusa.
+
+Verifiche eseguite:
+
+- `nginx -t` dentro il container: syntax ok;
+- reload (non restart) e poi, dal LAN: gitea **200**, semaphore **200**;
+- `POST /webhook` → il receiver lo riceve e risponde **401** («bad or
+  missing HMAC signature» nei suoi log): il path arriva intatto;
+- `POST /webhook/sottopath` → **404 dal receiver**, non 401. È la prova
+  che il sotto-path viene inoltrato: con la forma ingenua a variabile
+  nginx avrebbe mandato `/webhook` e la risposta sarebbe stata 401.
+
+`make test`: 216 pytest, invariato. Nessun test copre `proxy.conf`.
+
+### Quello che NON è stato verificato dal vivo
+
+Il recupero su un cambio d'indirizzo reale. Ho provato a riprodurlo
+ricreando `forge-gitea`, poi `forge-gitea` e `forge-webhook` insieme:
+Docker ha riassegnato entrambe le volte gli stessi indirizzi (`.5` e
+`.6`), quindi lo scenario non si è riprodotto. Il test deterministico —
+fermare Gitea, occupare il suo indirizzo con un container usa-e-getta,
+riavviarlo perché ne prenda un altro, e interrogare il proxy **senza
+riavviarlo** — è stato bloccato dal classificatore, correttamente:
+ferma un servizio e lancia un container arbitrario.
+
+Quindi: il meccanismo è comportamento documentato di nginx, la
+configurazione è valida e le tre rotte funzionano con la semantica dei
+path corretta. Che il proxy segua un container che cambia indirizzo
+resta da dimostrare sul ferro, con il comando consegnato a Daniele.
+Registrato come non verificato, non come fatto.
+
+## Nota di onestà: quante installazioni from scratch in questa sessione
+
+Domanda di Daniele a fine sessione: quante volte abbiamo installato da
+zero Linux e Windows per verificare davvero il deploy?
+
+**Zero.** In questa sessione non è mai stato lanciato
+`make provision-ubuntu`, `make provision-windows`, `make create-vms` né
+`make deploy`. Le due VM dichiarate verdi erano già installate da
+sessioni precedenti — `poc-ubuntu-01` a `attempts=2` (2026-08-29),
+`poc-windows-01` a `attempts=1` (2026-08-31).
+
+Quello che questa sessione ha dimostrato: il control plane è sano,
+l'anello GitOps arriva ad Ansible, i due target sono raggiungibili,
+gestibili e configurabili in modo idempotente a zero, e gli strumenti di
+misura ora dicono la verità. Quello che **non** ha dimostrato: che una
+macchina nuova si installi da zero oggi. Quell'affermazione poggerebbe
+sui logbook del 29 e del 31 agosto, non su prove di oggi.
+
+La distinzione va tenuta, soprattutto in un documento che verrà riletto
+fra settimane: è la stessa classe di scorciatoia che a inizio sessione
+ha prodotto la diagnosi sbagliata sul 502.
+
+Una prova reale richiede di azzerare lo stato di lifecycle
+(`./scripts/set-boot-state.sh <host> new`; il guard è a
+`max_install_attempts: 3` e i due host sono a 2 e 1) e rilanciare il
+provisioning — distruggendo lo stato verde appena raggiunto, che per un
+PoC è esattamente ciò che si deve poter fare.
