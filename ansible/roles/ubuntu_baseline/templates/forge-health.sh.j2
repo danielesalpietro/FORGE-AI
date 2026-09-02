@@ -16,6 +16,7 @@ set -Eeuo pipefail
 readonly EXPECTED_HOSTNAME="{{ inventory_hostname }}"
 readonly EXPECTED_USER="{{ users.automation_user }}"
 readonly STATE_FILE="/etc/forge-ai/state.json"
+readonly RUN_FILE="/etc/forge-ai/last-applied.json"
 readonly BANNER_FILE="/etc/issue.net"
 
 JSON_OUTPUT=false
@@ -78,7 +79,17 @@ check_cmd firewall "Status: active" bash -c "ufw status 2>/dev/null | head -1"
 
 # ---- desired state marker -------------------------------------------
 if [[ -r "$STATE_FILE" ]]; then
-    record desired-state true "$(jq -r '"commit " + .git_commit + " applied " + .applied_at' "$STATE_FILE" 2>/dev/null || echo present)"
+    # The commit comes from the desired state, the timestamp from the
+    # run record: they live in two files because one is stable and the
+    # other changes every run. A host configured by an older version has
+    # no RUN_FILE, so the timestamp degrades to "unknown" rather than
+    # turning the whole check red.
+    commit=$(jq -r '"commit " + .git_commit' "$STATE_FILE" 2>/dev/null || echo "commit unknown")
+    applied="unknown"
+    if [[ -r "$RUN_FILE" ]]; then
+        applied=$(jq -r '.applied_at' "$RUN_FILE" 2>/dev/null || echo unknown)
+    fi
+    record desired-state true "${commit} applied ${applied}"
 else
     record desired-state false "$STATE_FILE is missing: this host was not configured by FORGE-AI"
 fi

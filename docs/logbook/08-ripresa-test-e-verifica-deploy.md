@@ -485,3 +485,112 @@ fino alla causa. Tutti i controlli di stato dei due target sono verdi.
 Non regressione: `make test` 216 pytest + 31 bats exit 0;
 `ansible-lint --offline` su `windows_baseline` passa il profilo
 production; `yamllint` pulito sui file modificati.
+
+## Punti 1, 2 e 3 dei residui — verde pieno su entrambi i target
+
+Daniele ha chiesto di implementare tutte e tre le decisioni lasciate
+aperte alla fine del punto 1-bis.
+
+### 1 — La policy account Windows (bug 54)
+
+Indagine prima del fix, come impone `CLAUDE.md`. `net accounts` sul
+target confermava la divergenza:
+
+    Lockout threshold:                     10
+    Lockout duration (minutes):            15
+    Lockout observation window (minutes):  10     <- il playbook chiede 15
+
+Prova decisiva: `net accounts /lockoutwindow:15` applica **e mantiene**
+il valore 15. Windows quindi lo accetta — non era un vincolo del
+sistema, era **l'ordine di applicazione**. Windows tronca la finestra di
+osservazione alla durata del lockout *in vigore in quel momento*, e il
+loop impostava `ResetLockoutCount` **prima** di `LockoutDuration`: la
+finestra veniva agganciata alla durata vecchia e più bassa, e il
+successivo innalzamento della durata non la recuperava.
+
+Tre correzioni in `accounts.yml`:
+
+1. `LockoutDuration` spostato **prima** di `ResetLockoutCount` nel loop,
+   con il commento che spiega il perché;
+2. `LimitBlankPasswordUse` passato a `ansible.windows.win_regedit` su
+   `HKLM:\System\CurrentControlSet\Control\Lsa` — è un *Registry Value*,
+   non una voce `System Access`: dichiararlo nella sezione sbagliata
+   faceva sì che `win_security_policy` lo scrivesse dove non poteva
+   rileggerlo, quindi riportava `changed` a ogni run senza mai
+   verificare nulla;
+3. **rimosso `failed_when: false`** dal task. Era quello che rendeva
+   silenziosa tutta la divergenza: una policy di sicurezza che non
+   riesce ad applicarsi deve essere rumorosa.
+
+Verificato dopo l'applicazione:
+
+    Lockout observation window (minutes):  15
+    LimitBlankPasswordUse:                 1      (letto dal registro)
+
+### 2 — Marker di stato separato in due file
+
+`state.json` contiene ora solo ciò che descrive lo stato *desiderato*
+(`host`, `profile`, `git_commit`, `git_branch`): cambia quando cambia la
+configurazione, quindi è confrontabile. `last-applied.json` contiene i
+campi di *esecuzione* (`deployment_id`, `applied_at`, `applied_by`,
+`trigger`), marcato `changed_when: false` perché cambiare a ogni run è
+il suo mestiere, non un difetto.
+
+Applicato a entrambi i ruoli. `forge-health` aggiornato per leggere il
+commit dal primo file e il timestamp dal secondo, degradando a
+`unknown` se il secondo non c'è — un host configurato da una versione
+precedente non deve diventare rosso per questo.
+
+**Scoperta durante la verifica del mio stesso fix**: `applied_at`
+riportava le 18:07 mentre il run era delle 19:5x. Causa in
+`ansible/ansible.cfg:46-49`: `gathering = smart` con
+`fact_caching = jsonfile` e timeout 3600. **`ansible_date_time` è un
+fact cachato** — registrava quando i fact erano stati raccolti, non
+quando la configurazione era stata applicata, con un errore fino a
+un'ora.
+
+Questo spiega anche l'asimmetria che nella sezione precedente non
+sapevo spiegare: il marker Ubuntu sembrava idempotente perché il
+timestamp cachato non cambiava dentro la finestra di cache, mentre la
+play Windows raccoglie i propri fact con un task dedicato
+(`ansible.windows.setup`) e ne otteneva uno fresco ogni volta.
+
+Sostituito con `now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ')`, che
+valuta sul controller al momento del template. Verificato: run avviato
+alle 20:25:45 UTC, `applied_at` registrato `2026-09-02T20:26:42Z`.
+
+`forge_deployment_id` ha la stessa origine cachata, ma è un
+identificativo di deployment il cui essere stabile è una caratteristica,
+non un difetto: lasciato com'è.
+
+### 3 — La cache apt
+
+`changed_when: false` su `Update the package cache`. Rinfrescare un
+indice di pacchetti è un mezzo, non uno stato desiderato: dopo, la
+macchina non è diversa. Senza questa marcatura il task riportava
+`changed` ogni volta che la cache superava `cache_valid_time`, e
+`make smoke-test` falliva **una volta all'ora, per sempre**,
+indipendentemente dalla configurazione reale dell'host.
+
+### Esito
+
+    SMOKE TEST PASSED -- 23 checks    (exit 0)
+    [ ok ] poc-ubuntu-01   idempotence   0 task(s) would still change
+    [ ok ] poc-windows-01  idempotence   0 task(s) would still change
+
+**Prima volta nella campagna in cui entrambi i target sono idempotenti a
+zero e lo smoke test passa per intero.** Log grezzo in
+`docs/logbook/raw-logs/smoke-test-full-green-20260902.log`.
+
+Non regressione: `make test` 216 pytest + 31 bats exit 0;
+`make lint-shell` 16 script; `ansible-lint --offline` su tutti i ruoli,
+0 failure su 88 file, profilo production.
+
+### Il conto della sessione
+
+Partiti da «verifichiamo di saper ancora installare Linux e Windows».
+Trovati e corretti nove difetti (46-54), di cui sette **incolonnati**:
+ognuno invisibile finché quello sopra non veniva rimosso. Il valore non
+è nei singoli fix, è che la catena di misura ora dice la verità — prima
+diceva `PASSED` su metà flotta, `FAILED` su host sani, e `changed` su
+task che non avevano fatto nulla.

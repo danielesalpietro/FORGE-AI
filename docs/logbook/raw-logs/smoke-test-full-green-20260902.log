@@ -1,0 +1,49 @@
+[warn] WinRM certificate validation: DISABLED (security.winrm_cert_validation=ignore)
+       the PoC certificate is self-signed by Configure-WinRM.ps1;
+       set winrm_cert_validation: validate once a trusted certificate is enrolled
+  ______ ____  _____   _____ ______        _____
+ |  ____/ __ \|  __ \ / ____|  ____|      /  _  \_ _
+ | |__ | |  | | |__) | |  __| |__   ___  |  /_\  | |
+ |  __|| |  | |  _  /| | |_ |  __| |___| |  _  | | |
+ | |   | |__| | | \ \| |__| | |____      | | | | | |
+ |_|    \____/|_|  \_\\_____|______|     |_| |_|_|_|
+
+ GitOps infrastructure provisioning -- Proof of Concept
+
+
+==> Smoke test
+
+==> Ubuntu target: poc-ubuntu-01 (192.168.250.21)
+[ ok ] poc-ubuntu-01    vm-running                 running
+[ ok ] poc-ubuntu-01    ip-responds                192.168.250.21 answers ICMP
+[ ok ] poc-ubuntu-01    lifecycle-state            ready after 2 install attempt(s)
+[ ok ] poc-ubuntu-01    ssh-login                  key authentication succeeded as forgeops
+[ ok ] poc-ubuntu-01    hostname                   poc-ubuntu-01
+[ ok ] poc-ubuntu-01    qemu-guest-agent           active
+[ ok ] poc-ubuntu-01    automation-user            forgeops exists (groups: forgeops adm cdrom sudo dip plugdev lxd)
+[ ok ] poc-ubuntu-01    ssh-root-login             permitrootlogin no
+[ ok ] poc-ubuntu-01    ssh-password-auth          passwordauthentication no
+[ ok ] poc-ubuntu-01    firewall                   Status: active
+[ ok ] poc-ubuntu-01    forge-health               ok
+
+==> Windows target: poc-windows-01 (192.168.250.22)
+[ ok ] poc-windows-01   vm-running                 running
+[ ok ] poc-windows-01   ip-responds                192.168.250.22 answers ICMP
+[ ok ] poc-windows-01   lifecycle-state            ready after 1 install attempt(s)
+[ ok ] poc-windows-01   winrm-https                WS-Man listener answered HTTP 401 on 5986
+[ ok ] poc-windows-01   winrm-certificate          subject=CN = poc-windows-01
+[ ok ] poc-windows-01   winrm-auth                 win_ping succeeded
+[ ok ] poc-windows-01   hostname                   POC-WINDOWS-01
+[ ok ] poc-windows-01   smbv1-disabled             EnableSMB1Protocol=False
+[ ok ] poc-windows-01   firewall-enabled           Public profile Enabled=True
+[ ok ] poc-windows-01   windows-edition            Microsoft Windows Server 2025 Standard Evaluation
+       configured: Windows Server 2025 SERVERSTANDARD
+
+==> Idempotence: applying the baseline a second time, in check mode
+       an idempotent configuration changes nothing on the second run
+[ ok ] poc-ubuntu-01    idempotence                0 task(s) would still change
+[ ok ] poc-windows-01   idempotence                0 task(s) would still change
+
+================================================================
+ SMOKE TEST PASSED -- 23 checks
+================================================================
