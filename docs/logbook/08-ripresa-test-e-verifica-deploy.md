@@ -373,3 +373,115 @@ coincidono esattamente — 6 file, 207 inserzioni, 40 rimozioni.
 Nota a margine, non corretta: `make lint-yaml` invoca `yamllint` dal
 PATH e fallisce sull'host per la stessa ragione del bug 49. In CI passa
 perché lì yamllint è installato di sistema. Stesso difetto, altro file.
+
+## Punto 1-bis — il baseline Windows, e il bug 53
+
+Deciso con Daniele di anticipare al punto 3 l'analogo Windows del punto
+1, per capire se i 13 task in drift fossero "mai applicato" o
+"non idempotente". La risposta è: **tutti e due, in parti diverse.**
+
+    make configure ANSIBLE_ARGS="--limit poc-windows-01"
+    → exit 0, ok=61 changed=14 failed=0
+
+Drift residuo dopo l'applicazione: **13 → 5**. Otto task erano quindi
+davvero "baseline mai applicato fino in fondo", come su Ubuntu. I 5
+rimasti no.
+
+### Bug 53 — `changed_when` che matcha la propria negazione
+
+Tre task del ruolo `windows_baseline` sono scritti così:
+
+    if ($config.EnableSMB1Protocol) {
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+      Write-Output 'changed'
+    } else {
+      Write-Output 'unchanged'
+    }
+    ...
+    changed_when: forge_smb1_server.stdout is search('changed')
+
+**`'unchanged'` contiene `'changed'` come sottostringa.** `search` è una
+ricerca regex non ancorata, quindi la condizione è vera in entrambi i
+rami: questi task si dichiarano `changed` a ogni esecuzione, per sempre,
+che abbiano fatto qualcosa o no.
+
+Verificato eseguendo a mano la logica esatta del task sul target: stampa
+`unchanged`, e lo stato reale è già quello desiderato (`SMB1=False`,
+`Signing=True`). Il task diceva `changed` lo stesso.
+
+Occorrenze, tutte in `windows_baseline`: `smb.yml:22`, `smb.yml:45`,
+`firewall.yml:37`. Corrette in un confronto di uguaglianza su stringa
+ripulita (`| trim == 'changed'`), con il commento che spiega la trappola
+accanto a una delle tre.
+
+Effetto: drift Windows **5 → 2**.
+
+Perché non era mai emerso: rendeva inutile il segnale di drift proprio
+sulla metà Windows, che il bug 51 impediva di misurare del tutto. Un
+difetto invisibile dietro un difetto che nascondeva la misura.
+
+### I due residui: difetti reali, non artefatti del check mode
+
+Restano due task, e nessuno dei due è un falso positivo.
+
+**`Record the applied desired state`.** Il `--diff` mostra che cambiano
+solo due campi:
+
+    -    "applied_at": "2026-09-02T19:15:40Z",
+    +    "applied_at": "2026-09-02T19:33:39Z",
+    -    "deployment_id": "20260902T191540",
+    +    "deployment_id": "20260902T193339",
+
+Un marker che registra *quando* è stato applicato non può essere
+idempotente per costruzione. Il task identico esiste anche in
+`ubuntu_baseline` (`main.yml:119`). È una scelta di design da rivedere —
+per esempio scrivere i campi volatili in un file separato da quello che
+descrive lo stato desiderato — non un bug da correggere di slancio.
+
+**`Apply the local account policy`.** Due voci del loop su sei
+continuano a cambiare. L'export `secedit` dal target dice perché:
+
+    ResetLockoutCount = 10          <- il playbook chiede 15
+    MACHINE\System\CurrentControlSet\Control\Lsa\LimitBlankPasswordUse=4,1
+
+1. `ResetLockoutCount`: richiesto 15, la macchina tiene **10**. Non
+   converge, quindi ogni run riprova.
+2. `LimitBlankPasswordUse`: `secedit` lo esporta sotto *Registry
+   Values*, non sotto `System Access` — la sezione che il task dichiara.
+   Il modulo lo riscrive e non lo rilegge mai da lì.
+
+Entrambi mascherati da `failed_when: false` sul task, che li ha resi
+silenziosi. **Non corretti in questa sessione**: è configurazione di
+sicurezza di un host, e la scelta spetta a Daniele. Registrati qui
+perché il fatto è accertato: la policy di lockout applicata **non è
+quella che il codice dichiara**.
+
+### Il task Ubuntu: non era una regressione
+
+Dopo il giro Windows, `poc-ubuntu-01` è passato da 0 a 1 task in drift.
+L'ho chiamato regressione, e non lo era: il task è
+`Update the package cache`, con `cache_valid_time: 3600`. Verificato sul
+target — la cache è stata aggiornata alle 18:27 UTC, la misura è stata
+presa alle 19:39: 72 minuti, oltre la soglia.
+
+È l'orologio, non il fix. Ma è comunque un difetto dello strumento di
+misura: con quella soglia il check di idempotenza **fallisce una volta
+all'ora, per sempre, su qualunque host**. Rende `make smoke-test` non
+deterministico — passa o fallisce a seconda di quando lo lanci. Proprio
+il caso contro cui mette in guardia il messaggio dello script stesso
+("a task that reports changed on every run makes the drift report
+useless"). Non corretto qui: la soluzione ragionevole è `changed_when:
+false` su quel task (rinfrescare una cache di pacchetti non è un cambio
+di configurazione), ma è un cambiamento di comportamento di un ruolo, da
+concordare.
+
+### Esito misurato
+
+    SMOKE TEST FAILED -- 21 passed, 2 failed    (exit 1)
+
+I due rossi sono i due drift descritti sopra, entrambi caratterizzati
+fino alla causa. Tutti i controlli di stato dei due target sono verdi.
+
+Non regressione: `make test` 216 pytest + 31 bats exit 0;
+`ansible-lint --offline` su `windows_baseline` passa il profilo
+production; `yamllint` pulito sui file modificati.

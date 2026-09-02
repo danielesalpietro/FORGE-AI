@@ -1,0 +1,399 @@
+[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+[DEPRECATION WARNING]: community.general.yaml has been deprecated. The plugin has been superseded by the option `result_format=yaml` in callback plugin ansible.builtin.default from ansible-core 2.13 onwards. This feature will be removed from collection 'community.general' version 12.0.0.
+
+PLAY [Configure the Ubuntu targets] ********************************************
+skipping: no hosts matched
+
+PLAY [Configure the Windows targets] *******************************************
+
+TASK [Record when configuration started] ***************************************
+Wednesday 02 September 2026  19:15:35 +0000 (0:00:00.065)       0:00:00.065 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Gather the Windows facts] *****************************
+Wednesday 02 September 2026  19:15:35 +0000 (0:00:00.056)       0:00:00.121 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Confirm this is the host the inventory thinks it is] ***
+Wednesday 02 September 2026  19:15:41 +0000 (0:00:06.442)       0:00:06.563 *** 
+ok: [poc-windows-01] => changed=false 
+  msg: poc-windows-01 identity confirmed (POC-WINDOWS-01)
+
+TASK [windows_baseline : Report the installed edition] *************************
+Wednesday 02 September 2026  19:15:41 +0000 (0:00:00.070)       0:00:06.634 *** 
+ok: [poc-windows-01] => 
+  msg: 'poc-windows-01: Microsoft Windows Server 2025 Standard Evaluation (10.0.26100.0, build Server)'
+
+TASK [windows_baseline : Create the FORGE-AI state directory] ******************
+Wednesday 02 September 2026  19:15:42 +0000 (0:00:00.061)       0:00:06.695 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Record the applied desired state] *********************
+Wednesday 02 September 2026  19:15:44 +0000 (0:00:02.459)       0:00:09.155 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Include the SMB hardening] ****************************
+Wednesday 02 September 2026  19:15:50 +0000 (0:00:05.847)       0:00:15.003 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/smb.yml for poc-windows-01
+
+TASK [windows_baseline : Disable the SMBv1 server protocol] ********************
+Wednesday 02 September 2026  19:15:50 +0000 (0:00:00.088)       0:00:15.092 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Remove the SMBv1 client feature] **********************
+Wednesday 02 September 2026  19:15:56 +0000 (0:00:06.496)       0:00:21.588 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Require SMB signing on the server] ********************
+Wednesday 02 September 2026  19:16:05 +0000 (0:00:09.066)       0:00:30.655 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Verify SMBv1 is off] **********************************
+Wednesday 02 September 2026  19:16:12 +0000 (0:00:06.428)       0:00:37.084 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Assert SMBv1 is disabled] *****************************
+Wednesday 02 September 2026  19:16:18 +0000 (0:00:06.313)       0:00:43.397 *** 
+ok: [poc-windows-01] => changed=false 
+  msg: SMBv1 disabled
+
+TASK [windows_baseline : Include the firewall configuration] *******************
+Wednesday 02 September 2026  19:16:18 +0000 (0:00:00.065)       0:00:43.462 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/firewall.yml for poc-windows-01
+
+TASK [windows_baseline : Enable every firewall profile with inbound blocked] ***
+Wednesday 02 September 2026  19:16:18 +0000 (0:00:00.093)       0:00:43.556 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Set the default inbound and outbound actions] *********
+Wednesday 02 September 2026  19:16:24 +0000 (0:00:05.628)       0:00:49.184 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Scope the WinRM HTTPS rule to the management networks] ***
+Wednesday 02 September 2026  19:16:32 +0000 (0:00:08.144)       0:00:57.329 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Allow ICMP echo from the management networks] *********
+Wednesday 02 September 2026  19:16:35 +0000 (0:00:02.601)       0:00:59.930 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Disable the broad built-in WinRM rules] ***************
+Wednesday 02 September 2026  19:16:37 +0000 (0:00:02.680)       0:01:02.610 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Control Remote Desktop] *******************************
+Wednesday 02 September 2026  19:16:44 +0000 (0:00:06.733)       0:01:09.344 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Set the Remote Desktop firewall group to match] *******
+Wednesday 02 September 2026  19:16:48 +0000 (0:00:03.468)       0:01:12.813 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Include the Defender checks] **************************
+Wednesday 02 September 2026  19:16:54 +0000 (0:00:06.752)       0:01:19.565 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/defender.yml for poc-windows-01
+
+TASK [windows_baseline : Read the Defender status] *****************************
+Wednesday 02 September 2026  19:16:54 +0000 (0:00:00.084)       0:01:19.650 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Parse the Defender status] ****************************
+Wednesday 02 September 2026  19:17:00 +0000 (0:00:05.612)       0:01:25.262 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Report the Defender status] ***************************
+Wednesday 02 September 2026  19:17:00 +0000 (0:00:00.064)       0:01:25.327 *** 
+ok: [poc-windows-01] => 
+  msg: 'Defender on poc-windows-01: antivirus=True, real-time=True, service=True, signatures 1 day(s) old'
+
+TASK [windows_baseline : Assert Defender is running] ***************************
+Wednesday 02 September 2026  19:17:00 +0000 (0:00:00.062)       0:01:25.389 *** 
+ok: [poc-windows-01] => changed=false 
+  msg: Defender active with real-time protection
+
+TASK [windows_baseline : Note stale signatures] ********************************
+Wednesday 02 September 2026  19:17:00 +0000 (0:00:00.070)       0:01:25.459 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Include the TLS baseline] *****************************
+Wednesday 02 September 2026  19:17:00 +0000 (0:00:00.059)       0:01:25.519 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/tls.yml for poc-windows-01
+
+TASK [windows_baseline : Enable TLS 1.2 before disabling anything older] *******
+Wednesday 02 September 2026  19:17:00 +0000 (0:00:00.086)       0:01:25.605 *** 
+changed: [poc-windows-01] => (item=TLS 1.2 Server)
+changed: [poc-windows-01] => (item=TLS 1.2 Client)
+
+TASK [windows_baseline : Ensure TLS 1.2 is not disabled by default] ************
+Wednesday 02 September 2026  19:17:09 +0000 (0:00:08.195)       0:01:33.800 *** 
+changed: [poc-windows-01] => (item=TLS 1.2 Server)
+changed: [poc-windows-01] => (item=TLS 1.2 Client)
+
+TASK [windows_baseline : Disable the obsolete TLS and SSL versions] ************
+Wednesday 02 September 2026  19:17:15 +0000 (0:00:06.426)       0:01:40.227 *** 
+changed: [poc-windows-01] => (item=SSL 2.0 Server Enabled)
+changed: [poc-windows-01] => (item=SSL 2.0 Server DisabledByDefault)
+changed: [poc-windows-01] => (item=SSL 2.0 Client Enabled)
+changed: [poc-windows-01] => (item=SSL 2.0 Client DisabledByDefault)
+changed: [poc-windows-01] => (item=SSL 3.0 Server Enabled)
+changed: [poc-windows-01] => (item=SSL 3.0 Server DisabledByDefault)
+changed: [poc-windows-01] => (item=SSL 3.0 Client Enabled)
+changed: [poc-windows-01] => (item=SSL 3.0 Client DisabledByDefault)
+changed: [poc-windows-01] => (item=TLS 1.0 Server Enabled)
+changed: [poc-windows-01] => (item=TLS 1.0 Server DisabledByDefault)
+changed: [poc-windows-01] => (item=TLS 1.0 Client Enabled)
+changed: [poc-windows-01] => (item=TLS 1.0 Client DisabledByDefault)
+changed: [poc-windows-01] => (item=TLS 1.1 Server Enabled)
+changed: [poc-windows-01] => (item=TLS 1.1 Server DisabledByDefault)
+changed: [poc-windows-01] => (item=TLS 1.1 Client Enabled)
+changed: [poc-windows-01] => (item=TLS 1.1 Client DisabledByDefault)
+
+TASK [windows_baseline : Make .NET honour the system TLS defaults] *************
+Wednesday 02 September 2026  19:18:07 +0000 (0:00:51.678)       0:02:31.905 *** 
+changed: [poc-windows-01] => (item=HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319)
+changed: [poc-windows-01] => (item=HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319)
+
+TASK [windows_baseline : Make .NET use the OS default protocol version] ********
+Wednesday 02 September 2026  19:18:15 +0000 (0:00:08.271)       0:02:40.176 *** 
+changed: [poc-windows-01] => (item=HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319)
+changed: [poc-windows-01] => (item=HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319)
+
+TASK [windows_baseline : Note that the TLS changes need a reboot] **************
+Wednesday 02 September 2026  19:18:21 +0000 (0:00:06.343)       0:02:46.520 *** 
+ok: [poc-windows-01] => 
+  msg: SChannel protocol changes take effect on reboot. Until then this host still accepts the older protocols. The reboot handler will run at the end of this play unless windows_baseline_allow_reboot is false.
+
+TASK [windows_baseline : Include the local administrator governance] ***********
+Wednesday 02 September 2026  19:18:21 +0000 (0:00:00.047)       0:02:46.568 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/accounts.yml for poc-windows-01
+
+TASK [windows_baseline : Confirm the administrator account is the expected one] ***
+Wednesday 02 September 2026  19:18:21 +0000 (0:00:00.077)       0:02:46.646 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Report the local administrators] **********************
+Wednesday 02 September 2026  19:18:26 +0000 (0:00:05.001)       0:02:51.647 *** 
+ok: [poc-windows-01] => 
+  msg: 'Local Administrators on poc-windows-01: POC-WINDOWS-01\Administrator'
+
+TASK [windows_baseline : Warn about unexpected administrator group members] ****
+Wednesday 02 September 2026  19:18:27 +0000 (0:00:00.066)       0:02:51.713 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Disable the built-in Guest account] *******************
+Wednesday 02 September 2026  19:18:27 +0000 (0:00:00.062)       0:02:51.776 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Apply the local account policy] ***********************
+Wednesday 02 September 2026  19:18:30 +0000 (0:00:03.856)       0:02:55.633 *** 
+changed: [poc-windows-01] => (item=LimitBlankPasswordUse = 1)
+changed: [poc-windows-01] => (item=MinimumPasswordLength = 14)
+ok: [poc-windows-01] => (item=PasswordComplexity = 1)
+ok: [poc-windows-01] => (item=LockoutBadCount = 10)
+changed: [poc-windows-01] => (item=ResetLockoutCount = 15)
+changed: [poc-windows-01] => (item=LockoutDuration = 15)
+
+TASK [windows_baseline : Check LAPS readiness] *********************************
+Wednesday 02 September 2026  19:18:49 +0000 (0:00:18.568)       0:03:14.201 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Report LAPS readiness] ********************************
+Wednesday 02 September 2026  19:18:53 +0000 (0:00:04.395)       0:03:18.596 *** 
+ok: [poc-windows-01] => 
+  msg: |-
+    Windows LAPS readiness on poc-windows-01:
+      module present : True
+      domain joined  : False
+      can enable     : False
+  
+    LAPS is NOT configured by this PoC. It requires Entra ID or Active
+    Directory to store the rotated password, and this host is a standalone
+    workgroup member. Until then the local administrator password is a shared
+    static credential held in Ansible Vault -- see docs/SECURITY.md,
+    "WinRM credential theft".
+
+TASK [windows_baseline : Include the update policy] ****************************
+Wednesday 02 September 2026  19:18:54 +0000 (0:00:00.078)       0:03:18.674 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/updates.yml for poc-windows-01
+
+TASK [windows_baseline : Skip Windows Update entirely] *************************
+Wednesday 02 September 2026  19:18:54 +0000 (0:00:00.086)       0:03:18.761 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Query Windows Update] *********************************
+Wednesday 02 September 2026  19:18:54 +0000 (0:00:00.064)       0:03:18.826 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Report the update posture] ****************************
+Wednesday 02 September 2026  19:19:17 +0000 (0:00:23.806)       0:03:42.632 *** 
+ok: [poc-windows-01] => 
+  msg: |-
+    Windows Update on poc-windows-01 (mode: check_only):
+      found     : 5
+      installed : 0
+      failed    : 0
+      reboot required: False
+
+TASK [windows_baseline : Publish the update posture for the report] ************
+Wednesday 02 September 2026  19:19:18 +0000 (0:00:00.066)       0:03:42.698 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Include the event log configuration] ******************
+Wednesday 02 September 2026  19:19:18 +0000 (0:00:00.079)       0:03:42.778 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/eventlog.yml for poc-windows-01
+
+TASK [windows_baseline : Size the primary event logs] **************************
+Wednesday 02 September 2026  19:19:18 +0000 (0:00:00.070)       0:03:42.848 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Enable the audit policies that matter] ****************
+Wednesday 02 September 2026  19:19:25 +0000 (0:00:06.831)       0:03:49.680 *** 
+ok: [poc-windows-01] => (item=Logon)
+changed: [poc-windows-01] => (item=Logoff)
+changed: [poc-windows-01] => (item=Account Lockout)
+changed: [poc-windows-01] => (item=Special Logon)
+changed: [poc-windows-01] => (item=Security Group Management)
+changed: [poc-windows-01] => (item=User Account Management)
+changed: [poc-windows-01] => (item=Process Creation)
+
+TASK [windows_baseline : Report the event log configuration] *******************
+Wednesday 02 September 2026  19:19:49 +0000 (0:00:24.322)       0:04:14.003 *** 
+ok: [poc-windows-01] => 
+  msg: Event logs sized to 128 MB (unchanged).
+
+TASK [windows_baseline : Set the PowerShell execution policy] ******************
+Wednesday 02 September 2026  19:19:49 +0000 (0:00:00.066)       0:04:14.069 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Install the QEMU guest agent] *************************
+Wednesday 02 September 2026  19:19:54 +0000 (0:00:04.778)       0:04:18.848 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/guest-agent.yml for poc-windows-01
+
+TASK [windows_baseline : Check whether the guest agent service exists] *********
+Wednesday 02 September 2026  19:19:54 +0000 (0:00:00.093)       0:04:18.941 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Report an already-installed guest agent] **************
+Wednesday 02 September 2026  19:19:59 +0000 (0:00:05.651)       0:04:24.592 *** 
+ok: [poc-windows-01] => 
+  msg: 'QEMU guest agent already present (state: started).'
+
+TASK [windows_baseline : Download the guest agent installer from the boot server] ***
+Wednesday 02 September 2026  19:20:00 +0000 (0:00:00.068)       0:04:24.661 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Install the guest agent] ******************************
+Wednesday 02 September 2026  19:20:00 +0000 (0:00:00.055)       0:04:24.717 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Ensure the guest agent service is running] ************
+Wednesday 02 September 2026  19:20:00 +0000 (0:00:00.057)       0:04:24.774 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Note when the guest agent could not be installed] *****
+Wednesday 02 September 2026  19:20:04 +0000 (0:00:03.970)       0:04:28.744 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Install the requested Windows features] ***************
+Wednesday 02 September 2026  19:20:04 +0000 (0:00:00.051)       0:04:28.795 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Apply any pending reboot] *****************************
+Wednesday 02 September 2026  19:20:04 +0000 (0:00:00.058)       0:04:28.854 *** 
+
+RUNNING HANDLER [windows_baseline : Reboot the Windows host] *******************
+Wednesday 02 September 2026  19:20:04 +0000 (0:00:00.015)       0:04:28.869 *** 
+changed: [poc-windows-01]
+
+TASK [windows_baseline : Include the final validation] *************************
+Wednesday 02 September 2026  19:23:56 +0000 (0:03:52.454)       0:08:21.323 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/validate.yml for poc-windows-01
+
+TASK [windows_baseline : Confirm WinRM is reachable] ***************************
+Wednesday 02 September 2026  19:23:56 +0000 (0:00:00.080)       0:08:21.403 *** 
+ok: [poc-windows-01]
+
+TASK [windows_baseline : Collect the compliance evidence] **********************
+Wednesday 02 September 2026  19:24:17 +0000 (0:00:20.593)       0:08:41.997 *** 
+ok: [poc-windows-01] => (item=smbv1-disabled)
+ok: [poc-windows-01] => (item=firewall-domain-profile)
+ok: [poc-windows-01] => (item=firewall-public-profile)
+ok: [poc-windows-01] => (item=winrm-https-listener)
+ok: [poc-windows-01] => (item=winrm-basic-auth-disabled)
+ok: [poc-windows-01] => (item=rdp-denied)
+ok: [poc-windows-01] => (item=defender-service)
+
+TASK [windows_baseline : Compare every probe against the desired state] ********
+Wednesday 02 September 2026  19:25:24 +0000 (0:01:07.525)       0:09:49.522 *** 
+ok: [poc-windows-01] => (item=smbv1-disabled)
+ok: [poc-windows-01] => (item=firewall-domain-profile)
+ok: [poc-windows-01] => (item=firewall-public-profile)
+ok: [poc-windows-01] => (item=winrm-https-listener)
+ok: [poc-windows-01] => (item=winrm-basic-auth-disabled)
+ok: [poc-windows-01] => (item=rdp-denied)
+ok: [poc-windows-01] => (item=defender-service)
+
+TASK [windows_baseline : Report each compliance probe] *************************
+Wednesday 02 September 2026  19:25:25 +0000 (0:00:00.165)       0:09:49.687 *** 
+ok: [poc-windows-01] => (item=smbv1-disabled) => 
+  msg: '[ok]   smbv1-disabled: expected ''False'', observed ''False'''
+ok: [poc-windows-01] => (item=firewall-domain-profile) => 
+  msg: '[ok]   firewall-domain-profile: expected ''True'', observed ''True'''
+ok: [poc-windows-01] => (item=firewall-public-profile) => 
+  msg: '[ok]   firewall-public-profile: expected ''True'', observed ''True'''
+ok: [poc-windows-01] => (item=winrm-https-listener) => 
+  msg: '[ok]   winrm-https-listener: expected ''1'', observed ''1'''
+ok: [poc-windows-01] => (item=winrm-basic-auth-disabled) => 
+  msg: '[ok]   winrm-basic-auth-disabled: expected ''false'', observed ''false'''
+ok: [poc-windows-01] => (item=rdp-denied) => 
+  msg: '[ok]   rdp-denied: expected ''1'', observed ''1'''
+ok: [poc-windows-01] => (item=defender-service) => 
+  msg: '[ok]   defender-service: expected ''Running'', observed ''Running'''
+
+TASK [windows_baseline : Fail when a compliance probe disagrees with the desired state] ***
+Wednesday 02 September 2026  19:25:25 +0000 (0:00:00.130)       0:09:49.818 *** 
+skipping: [poc-windows-01]
+
+TASK [windows_baseline : Publish the validation result] ************************
+Wednesday 02 September 2026  19:25:25 +0000 (0:00:00.062)       0:09:49.880 *** 
+ok: [poc-windows-01]
+
+TASK [Record the configuration result] *****************************************
+Wednesday 02 September 2026  19:25:25 +0000 (0:00:00.115)       0:09:49.996 *** 
+ok: [poc-windows-01]
+
+TASK [Advance the lifecycle state to 'ready'] **********************************
+Wednesday 02 September 2026  19:25:25 +0000 (0:00:00.090)       0:09:50.086 *** 
+ok: [poc-windows-01 -> localhost]
+
+PLAY RECAP *********************************************************************
+poc-windows-01             : ok=61   changed=14   unreachable=0    failed=0    skipped=8    rescued=0    ignored=0   
+
+
+TASKS RECAP ********************************************************************
+Wednesday 02 September 2026  19:25:26 +0000 (0:00:00.865)       0:09:50.952 *** 
+=============================================================================== 
+windows_baseline : Reboot the Windows host ---------------------------- 232.45s
+windows_baseline : Collect the compliance evidence --------------------- 67.53s
+windows_baseline : Disable the obsolete TLS and SSL versions ----------- 51.68s
+windows_baseline : Enable the audit policies that matter --------------- 24.32s
+windows_baseline : Query Windows Update -------------------------------- 23.81s
+windows_baseline : Confirm WinRM is reachable -------------------------- 20.59s
+windows_baseline : Apply the local account policy ---------------------- 18.57s
+windows_baseline : Remove the SMBv1 client feature ---------------------- 9.07s
+windows_baseline : Make .NET honour the system TLS defaults ------------- 8.27s
+windows_baseline : Enable TLS 1.2 before disabling anything older ------- 8.20s
+windows_baseline : Set the default inbound and outbound actions --------- 8.14s
+windows_baseline : Size the primary event logs -------------------------- 6.83s
+windows_baseline : Set the Remote Desktop firewall group to match ------- 6.75s
+windows_baseline : Disable the broad built-in WinRM rules --------------- 6.73s
+windows_baseline : Disable the SMBv1 server protocol -------------------- 6.50s
+windows_baseline : Gather the Windows facts ----------------------------- 6.44s
+windows_baseline : Require SMB signing on the server -------------------- 6.43s
+windows_baseline : Ensure TLS 1.2 is not disabled by default ------------ 6.43s
+windows_baseline : Make .NET use the OS default protocol version -------- 6.34s
+windows_baseline : Verify SMBv1 is off ---------------------------------- 6.31s
+
+PLAYBOOK RECAP *****************************************************************
+Playbook run took 0 days, 0 hours, 9 minutes, 50 seconds
+
