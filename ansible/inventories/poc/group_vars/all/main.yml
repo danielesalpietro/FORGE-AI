@@ -54,14 +54,33 @@ forge_wait_poll_interval: 15
 # ---------------------------------------------------------------------
 # Secrets
 # ---------------------------------------------------------------------
-# Real values live in group_vars/all/vault.yml (Ansible Vault, git
-# ignored) or in the Semaphore Key Store. See vault.yml.example.
-# Declared here as empty so a missing vault produces a clear failure in
+# Real values live in group_vars/all/vault.yml, which is committed
+# encrypted at rest (docs/SECURITY.md, "Secrets: where each one lives"),
+# or in the Semaphore Key Store. See vault.yml.example for the shape.
+#
+# There are deliberately NO empty defaults for the secrets here.
+#
+# There used to be three, justified by a comment promising that a
+# missing vault would "produce a clear failure in
 # validate-prerequisites.yml rather than an undefined-variable crash
-# three playbooks later.
-vault_ubuntu_bootstrap_password: ""
-vault_windows_admin_password: ""
-vault_forge_state_token: ""
-
-ubuntu_bootstrap_password_hash: "{{ vault_ubuntu_bootstrap_password_hash | default('') }}"
-forge_state_token: "{{ vault_forge_state_token | default('') }}"
+# three playbooks later". That check does not exist: neither
+# validate-prerequisites.yml nor the prerequisite_validation role ever
+# looks at these variables, and the Semaphore route runs
+# validate-deployment.yml, which does not include them either.
+#
+# So the defaults protected nothing. What they did was turn "the secret
+# is missing" into "an empty password was offered to the target", which
+# WinRM reports as "the specified credentials were rejected by the
+# server" -- a message that sends you looking for a wrong password when
+# the truth is that no password was configured at all. That cost a full
+# session to diagnose (bug 45; see docs/logbook/07-project-review.md and
+# 08-ripresa-test-e-verifica-deploy.md).
+#
+# Undefined is the better failure. It is immediate, it names the
+# variable, and it cannot be mistaken for a credential problem. Note
+# that no in-play assertion could replace it for the Windows path:
+# vault_windows_admin_password is consumed by group_vars/windows/main.yml
+# as ansible_password, so it is read when the connection is set up,
+# before any task in the play can run.
+ubuntu_bootstrap_password_hash: "{{ vault_ubuntu_bootstrap_password_hash }}"
+forge_state_token: "{{ vault_forge_state_token }}"

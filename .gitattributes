@@ -1,0 +1,18 @@
+# =====================================================================
+# FORGE-AI :: line-ending policy
+# =====================================================================
+
+# The Ansible Vault is a checksummed ciphertext. Git's CRLF conversion
+# would rewrite it on checkout under core.autocrlf, and ansible-vault
+# would then refuse to decrypt a file it considers corrupt. The vault is
+# consumed on Linux hosts and inside the Semaphore container, so the
+# damage would only appear on a Windows working copy -- which is exactly
+# the kind of failure that shows up once, far from here, and looks like
+# a wrong password.
+ansible/inventories/poc/group_vars/all/vault.yml -text
+
+# Shell scripts and anything a Linux target executes must keep LF: a
+# CRLF shebang line makes the kernel report "bad interpreter".
+*.sh text eol=lf
+*.j2 text eol=lf
+*.bats text eol=lf
