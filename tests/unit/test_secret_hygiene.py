@@ -97,18 +97,59 @@ def test_the_environment_file_is_not_tracked(tracked):
     assert "compose/.env.example" in names
 
 
-def test_no_vault_file_is_tracked(tracked):
+def test_the_vault_file_if_tracked_is_actually_encrypted(tracked_text):
+    """Bug 45 / #33 option A: vault.yml is now meant to be tracked and
+    committed, encrypted at rest -- only the vault password that
+    decrypts it stays out of the repository (docs/SECURITY.md,
+    "Secrets: where each one lives"). This does not require vault.yml
+    to exist (a checkout with no real secrets yet is still valid); it
+    only guards against the one way this model can fail silently: the
+    designated file existing but holding plaintext instead of a real
+    Ansible Vault payload.
+    """
+    candidates = [(p, t) for p, t in tracked_text if p.name == "vault.yml"]
+    for path, text in candidates:
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        assert rel == "ansible/inventories/poc/group_vars/all/vault.yml", (
+            f"a vault.yml is tracked outside its designated path: {rel}"
+        )
+        # Built from fragments, like SECRET_PATTERNS below, so this file
+        # does not itself contain the literal marker it checks for.
+        vault_header = "$ANSIBLE_" + "VAULT;"
+        assert text.lstrip().startswith(vault_header), (
+            f"{rel} is tracked but does not look encrypted (no Ansible Vault header)"
+        )
+
+
+def test_group_vars_all_has_no_other_ansible_loadable_file(tracked):
+    """Bug 45: Ansible's group_vars loader parses every file in
+    group_vars/all/ whose name has no extension or ends in .yml/.yaml/
+    .json -- vault.yml included, which is the point once it is the
+    real, tracked, encrypted vault (see #33 option A). A tracked file
+    that happens to match one of those extensions is loaded right
+    alongside it, silently, which is exactly how vault.example.yml
+    became a live fallback for the real vault (see
+    docs/logbook/07-project-review.md, bug 45). Only main.yml and
+    vault.yml -- the two real, intentional vars files -- may have a
+    loadable name here; anything else (vault.yml.example included)
+    must not.
+    """
+    loadable_extensions = {"", ".yml", ".yaml", ".json"}
+    intentional = {"main.yml", "vault.yml"}
+    group_vars_all = REPO_ROOT / "ansible/inventories/poc/group_vars/all"
     offenders = [
         path.relative_to(REPO_ROOT)
         for path in tracked
-        if path.name == "vault.yml"
+        if path.parent == group_vars_all
+        and path.name not in intentional
+        and path.suffix in loadable_extensions
     ]
     assert offenders == [], offenders
 
 
 def test_the_vault_example_is_tracked_and_holds_only_placeholders(tracked_text):
-    examples = [(p, t) for p, t in tracked_text if p.name == "vault.example.yml"]
-    assert examples, "vault.example.yml must exist so operators know what to fill in"
+    examples = [(p, t) for p, t in tracked_text if p.name == "vault.yml.example"]
+    assert examples, "vault.yml.example must exist so operators know what to fill in"
 
     for path, text in examples:
         for line in text.splitlines():
@@ -144,11 +185,20 @@ SECRET_PATTERNS = [
 
 
 def test_no_tracked_file_contains_an_obvious_credential(tracked_text):
+    """The designated vault (#33 option A) is the one intentional
+    exception to the Ansible Vault payload pattern -- it is SUPPOSED to
+    contain one. test_the_vault_file_if_tracked_is_actually_encrypted
+    covers it instead. Every other pattern, and every other file
+    (including a vault.yml anywhere else), is still checked."""
+    designated_vault = "ansible/inventories/poc/group_vars/all/vault.yml"
     offenders = []
     for path, text in tracked_text:
+        relative = path.relative_to(REPO_ROOT).as_posix()
         for pattern, description in SECRET_PATTERNS:
+            if relative == designated_vault and description == "an Ansible Vault payload":
+                continue
             if pattern.search(text):
-                offenders.append((path.relative_to(REPO_ROOT).as_posix(), description))
+                offenders.append((relative, description))
     assert offenders == [], offenders
 
 
@@ -257,7 +307,6 @@ def test_no_tracked_file_assigns_a_literal_credential(tracked_text):
         "compose/.env",
         "config/poc.yml",
         ".vault-password",
-        "ansible/inventories/poc/group_vars/all/vault.yml",
         "compose/nginx/tls/forge-ai.key",
         "compose/nginx/tls/forge-ai.crt",
         "some-image.iso",
@@ -278,14 +327,17 @@ def test_gitignore_covers_the_sensitive_paths(path):
     [
         "config/poc.example.yml",
         "compose/.env.example",
-        "ansible/inventories/poc/group_vars/all/vault.example.yml",
+        "ansible/inventories/poc/group_vars/all/vault.yml.example",
+        "ansible/inventories/poc/group_vars/all/vault.yml",
         "ansible/templates/windows/Autounattend.xml.j2",
         "ansible/templates/ubuntu/user-data.j2",
     ],
 )
 def test_gitignore_does_not_swallow_the_examples_and_templates(path):
     """The .gitignore rules for `**/Autounattend.xml` and `**/user-data`
-    must not also exclude the templates that generate them."""
+    must not also exclude the templates that generate them -- and, since
+    #33 option A, must not exclude the (encrypted, tracked) vault.yml
+    either."""
     result = subprocess.run(
         ["git", "check-ignore", "-q", path],
         cwd=REPO_ROOT, capture_output=True,

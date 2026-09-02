@@ -414,11 +414,36 @@ bypass the interactive prompt. The Ansible-side assertion still holds.
 
 | Store | Holds | Why there |
 |---|---|---|
-| **Ansible Vault** | Passwords and tokens for operator-run tasks | The operator has the vault password |
-| **Semaphore Key Store** | The same secrets, for Semaphore-run tasks | Encrypted at rest; a runner has no vault password, and giving it one would defeat the point |
+| **Ansible Vault** (`vault.yml`, committed, encrypted) | Passwords and tokens for both operator-run and Semaphore-run tasks | One encrypted artifact, tracked in git, decrypted by whoever has the vault password. See "Bug 45" below for why this replaced a second, independent copy. |
+| **Semaphore Key Store** | Only the vault password (`forge-ai-vault`) | Decrypts the same committed `vault.yml` Semaphore's clone already has -- not a separate copy of each secret |
 | **`compose/.env`** | Control-plane credentials, mode `0600` | Read by Docker at start-up |
 | **GitHub Actions secrets** | Only the Gitea sync credential | Nothing else needs to leave GitHub |
 | **Semaphore *environment*** | **No secrets** | Semaphore stores it as plain JSON in its database. The template says so in its own comment. |
+
+### Bug 45: why the vault is committed, not just kept local
+
+Until #33/#36/#37, `vault.yml` was git-ignored and Semaphore's clone
+from Gitea therefore never had it -- `vault.example.yml` (the
+placeholder file operators copy from) was tracked instead, and
+Ansible loads every file in `group_vars/all/` regardless of name. The
+result: every Semaphore run silently used the example's placeholder
+credentials, a failure that looks like a wrong password rather than a
+missing file. `docs/logbook/07-project-review.md` has the full
+diagnosis.
+
+The fix (option A of #33, chosen over injecting each secret as a
+Semaphore environment variable): commit `vault.yml` itself, encrypted.
+The repository is public, so the ciphertext is exposed indefinitely --
+accepted here because these credentials protect lab VMs on a private
+LAN, not a production estate; a real secrets vault (issue #20) is the
+way past this compromise once the project outgrows PoC status. What
+this buys in exchange: a single artifact feeds both execution paths,
+so the class of drift that caused bug 45 is impossible by
+construction, not just less likely. `.github/workflows/security.yml`
+enforces the shape of this deliberately: the vault password
+(`.vault-password`) must never be committed from anywhere, and
+`vault.yml` must exist at exactly its one designated path and nowhere
+else, encrypted -- never plaintext, never a second copy.
 
 Every generated file has its mode set **before** content is written
 (`install -m 0600 /dev/null`), so there is no window in which a secret

@@ -19,9 +19,11 @@ compose/.env.*
 !.env.example
 
 # Ansible Vault and generated vault material
-ansible/inventories/*/group_vars/all/vault.yml
-ansible/inventories/**/vault.yml
-!ansible/inventories/**/vault.example.yml
+#
+# vault.yml itself IS tracked and committed, encrypted at rest (see
+# docs/SECURITY.md, "Secrets: where each one lives") -- only the vault
+# password that decrypts it stays local.
+!ansible/inventories/**/vault.yml.example
 .vault-password
 .vault_pass
 *.vault
