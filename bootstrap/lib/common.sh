@@ -114,6 +114,22 @@ else
 fi
 export FORGE_ANSIBLE_PLAYBOOK
 
+# Same reasoning for the ad-hoc `ansible` binary, which smoke-test.sh
+# uses for the in-guest Windows checks. It was resolved from PATH alone,
+# so on a host where prepare-host.sh had installed Ansible exactly as
+# documented -- into the venv, not onto PATH -- every one of those
+# checks skipped itself with "ansible is not available" and the smoke
+# test still exited 0. Empty is a valid answer here: callers test
+# FORGE_ANSIBLE before using it and report the skip honestly.
+if [[ -x "$FORGE_ROOT/.venv/bin/ansible" ]]; then
+    FORGE_ANSIBLE="$FORGE_ROOT/.venv/bin/ansible"
+elif command -v ansible >/dev/null 2>&1; then
+    FORGE_ANSIBLE="ansible"
+else
+    FORGE_ANSIBLE=""
+fi
+export FORGE_ANSIBLE
+
 # ---------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------

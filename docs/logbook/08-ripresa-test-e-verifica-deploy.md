@@ -257,3 +257,119 @@ dopo.
 **Stato della metà Linux del PoC dopo il punto 1: verde end-to-end** —
 installazione PXE, baseline, health check, idempotenza, e la catena
 GitOps fino ad Ansible (task Semaphore 10, `poc-ubuntu-01 ok=6`).
+
+## Punto 2 — lo smoke test: due fix diventati cinque
+
+Il punto 2 era «sistemare i bug 47 e 48». Sistemandoli sono emersi tre
+altri difetti nella stessa catena, ognuno reso invisibile da quello
+sopra di lui. Vale la pena elencarli nell'ordine in cui si sono
+scoperti, perché è lo stesso ordine in cui si nascondevano.
+
+**Bug 47 — `ssh -n`.** Aggiunto in `scripts/smoke-test.sh:111`, con il
+commento che spiega perché è portante e non decorativo. Aggiunto anche
+in `scripts/wait-for-ssh.sh`: lì non era un bug attivo (`ssh` gira in un
+loop a timeout, non alimentato da stdin), ma l'omissione è la stessa e
+il comando remoto non legge input.
+
+**Bug 48 — il probe WinRM.** Riscritto. Non cerca più una
+`IdentifyResponse` che un listener autenticato non restituirà mai:
+adesso legge lo **status code** e considera valido tutto ciò che non sia
+`000`. Un 401 a una richiesta anonima è la risposta corretta di un host
+configurato bene, e ora viene registrata come tale. L'autenticazione è
+diventata un check separato, `winrm-auth`, che usa `win_ping`.
+
+La separazione non è cosmetica: «non risponde nessuno» e «la password è
+sbagliata» hanno cause e rimedi diversi, e averle collassate in un unico
+verdetto è esattamente ciò che ha reso il bug 45 così costoso da
+trovare. Ora lo smoke test le distingue da solo.
+
+**Bug 49 — Ansible cercato solo nel PATH.** `windows_shell` invocava
+`ansible` dal PATH; su questo host Ansible sta nel venv del repository,
+dove `prepare-host.sh` lo installa **come da documentazione**. Risultato:
+i controlli in-guest si auto-saltavano con "ansible is not available" e
+lo smoke test usciva comunque 0.
+
+Esisteva già l'idioma giusto in `bootstrap/lib/common.sh`
+(`FORGE_ANSIBLE_PLAYBOOK`), nato dallo stesso identico problema. Invece
+di scrivere una seconda soluzione locale, ho aggiunto il gemello
+`FORGE_ANSIBLE` accanto a quello.
+
+**Bug 50 — il parse dello stdout Windows.** Con il 48 sistemato, i
+quattro controlli in-guest hanno finalmente girato — e sono tornati
+tutti `<no output>`. Causa: `windows_shell` cercava una chiave JSON
+`"stdout":` mentre `ansible.cfg:18` imposta `stdout_callback = yaml`,
+callback che per `win_shell` non stampa affatto l'output del comando.
+Il parse non poteva funzionare da sempre; era invisibile perché il bug
+48 tornava indietro prima di arrivarci. Riscritto per forzare
+`ANSIBLE_STDOUT_CALLBACK=minimal` e leggere lo stdout vero.
+
+**Bug 51 — l'assert in check mode che abortiva la run.** La verifica di
+idempotenza girava `configure-targets.yml --check` e riportava **solo**
+`poc-ubuntu-01`. Motivo: `ansible.builtin.command: sshd -T` non ha
+`check_mode: false`, quindi in check mode viene saltato, l'assert
+"Assert the hardening actually took effect" valuta uno stdout vuoto e
+fallisce **su un host configurato correttamente** — abortendo la run
+prima della play Windows. Stesso schema in `firewall.yml` con
+`ufw status verbose`.
+
+Notevole: il ruolo `windows_baseline` usa già `check_mode: false` sulle
+sue letture (`accounts.yml`, `smb.yml`, `validate.yml`). Era
+`ubuntu_baseline` a non farlo — un'asimmetria, non una scelta.
+
+Lasciati deliberatamente stare `time.yml` (`chronyc waitsync`, che
+oltre a leggere *aspetta*) e `validate.yml` (`forge-health --json`):
+entrambi hanno `failed_when: false` e non abortiscono nulla. Segnalati
+qui invece di allargare il fix in silenzio.
+
+**Bug 52 — exit 141 al posto di 1.** Con la play Windows finalmente
+raggiunta, lo smoke test ha iniziato a uscire **141** invece di 1.
+SIGPIPE: in `test_idempotence` c'era `grep -B2 -A8 'changed:' | head -40`,
+e sotto `set -o pipefail` il `head` che chiude il pipe uccide il grep e
+il 141 diventa il codice d'uscita dell'intero script. Sostituito con
+`sed -n '1,40p'`, che consuma tutto l'input. Anche questo raggiungibile
+solo dopo il 51.
+
+### Test di regressione
+
+Aggiunto a `tests/bats/test_scripts_interface.bats` un controllo statico
+su tutti gli script: nessuna invocazione di `ssh` senza `-n` o senza
+`</dev/null`.
+
+Prima versione bocciata da sé stessa, giustamente: segnalava un `ssh -L`
+dentro un heredoc di `bootstrap.sh` — istruzioni stampate all'operatore,
+non una chiamata. Aggiunto un helper `executable_lines()` che, oltre a
+togliere i commenti, salta i corpi degli heredoc. Una guardia che grida
+al lupo insegna a ignorarla.
+
+### Esito misurato
+
+Smoke test completo, **senza `--host`** — cioè esattamente l'invocazione
+che prima perdeva metà flotta in silenzio:
+
+    SMOKE TEST FAILED -- 22 passed, 1 failed    (exit 1)
+
+Da 12 check su un host a **23 check su due host**. Log grezzo in
+`docs/logbook/raw-logs/smoke-test-both-targets-20260902.log`.
+
+L'unico rosso è un ritrovamento vero, non un difetto dello strumento:
+
+    [FAIL] poc-windows-01  idempotence  13 task(s) would still change
+
+Da leggere con la stessa cautela usata per il punto 1: `poc-windows-01`
+è in stato lifecycle `configuring`, non `ready` — la stessa condizione
+in cui era `poc-ubuntu-01` prima del `make configure`. I 13 task che
+cambierebbero sono quindi molto probabilmente "baseline mai applicato
+fino in fondo", non "baseline non idempotente". Distinzione da provare,
+non da assumere: si prova applicandolo.
+
+Verifiche di non regressione: `make test` **216 pytest + 31 bats, exit
+0**; `make lint-shell` pulito su 16 script; `yamllint` e `ansible-lint
+--offline` (profilo production) puliti sui file modificati.
+
+Nota di igiene sul doppio canale pscp/git, la trappola già registrata
+nella voce 07: a fine punto 2 `git diff --stat` sull'host e in locale
+coincidono esattamente — 6 file, 207 inserzioni, 40 rimozioni.
+
+Nota a margine, non corretta: `make lint-yaml` invoca `yamllint` dal
+PATH e fallisce sull'host per la stessa ragione del bug 49. In CI passa
+perché lì yamllint è installato di sistema. Stesso difetto, altro file.

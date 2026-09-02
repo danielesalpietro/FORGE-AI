@@ -108,3 +108,51 @@ all_scripts() {
         fi
     done < <(all_scripts)
 }
+
+# Lines a shell would actually execute: comments stripped, and heredoc
+# bodies removed. bootstrap.sh prints an `ssh -L ...` tunnel recipe to
+# the operator inside a heredoc, which is documentation, not a call --
+# without this, the check below flags it and the guard trains people to
+# ignore it.
+executable_lines() {
+    sed 's/#.*$//' "$1" | awk '
+        inside {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            if ($0 == marker) inside = 0
+            next
+        }
+        {
+            if (match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*/)) {
+                marker = substr($0, RSTART, RLENGTH)
+                gsub(/^<<-?[[:space:]]*['"'"'"]?/, "", marker)
+                inside = 1
+            }
+            print
+        }'
+}
+
+@test "no script invokes ssh without protecting the caller's stdin" {
+    # Regression guard for the bug that made smoke-test.sh report a
+    # verdict over half the fleet in silence (2026-09-02).
+    #
+    # ssh reads its stdin to EOF and forwards it to the remote command.
+    # When the call sits inside a `while read` loop -- which is how
+    # these scripts iterate a host list -- that stdin IS the host list,
+    # so the first connection consumes every remaining host and the loop
+    # ends after one iteration. Nothing fails; the hosts just vanish
+    # from the report.
+    #
+    # Either -n or an explicit </dev/null makes the call safe. Both are
+    # accepted rather than mandating one.
+    while read -r script; do
+        while IFS= read -r line; do
+            [[ "$line" =~ (^|[^[:alnum:]_-])ssh[[:space:]] ]] || continue
+            [[ "$line" =~ ssh-keygen|ssh-keyscan|ssh-copy-id|ssh-add ]] && continue
+            [[ "$line" =~ [[:space:]]-n[[:space:]] ]] && continue
+            [[ "$line" =~ \</dev/null ]] && continue
+            echo "$script: ssh call neither passes -n nor redirects stdin:"
+            echo "  $line"
+            return 1
+        done < <(executable_lines "$script" | grep -E '(^|[^[:alnum:]_-])ssh[[:space:]]')
+    done < <(all_scripts)
+}
