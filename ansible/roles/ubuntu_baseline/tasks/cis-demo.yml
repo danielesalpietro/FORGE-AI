@@ -42,6 +42,30 @@
   become: true
   tags: [linux, security]
 
+# ufw keeps its own sysctl file and applies it on every reload:
+# /etc/default/ufw points IPT_SYSCTL at /etc/ufw/sysctl.conf, which ships
+# net/ipv4/conf/all/log_martians=0. That silently overrode the value set
+# below, so every run found it at 0 and set it back to 1 -- one spurious
+# "changed" per run, for ever, and a hardening control that was off
+# between the ufw task and this one.
+#
+# Verified on the target (2026-09-02): sysctl reads 1, `ufw reload`, sysctl
+# reads 0. See docs/logbook/08-ripresa-test-e-verifica-deploy.md.
+#
+# Aligning ufw's own declaration is deliberate, rather than emptying
+# IPT_SYSCTL to disable ufw's sysctl handling altogether: that would also
+# stop it applying every other value in that file, which is a much larger
+# change than this control needs.
+- name: Stop ufw from reverting the martian-packet logging setting
+  ansible.builtin.lineinfile:
+    path: /etc/ufw/sysctl.conf
+    regexp: '^#?\s*net/ipv4/conf/all/log_martians\s*='
+    line: "net/ipv4/conf/all/log_martians=1"
+    state: present
+  become: true
+  when: ubuntu_baseline_manage_firewall | bool
+  tags: [linux, security]
+
 - name: Apply kernel network hardening
   ansible.posix.sysctl:
     name: "{{ item.key }}"

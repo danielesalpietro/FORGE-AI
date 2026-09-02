@@ -244,6 +244,18 @@ Costano tempo ogni volta che si riscoprono. Tutte verificate dal vivo.
 - **Su Git Bash / Windows**, `git show origin/develop:.gitignore` fallisce
   perché MSYS converte i due punti in un path: anteporre
   `MSYS_NO_PATHCONV=1`.
+- **Mai un valore volatile dentro uno stato desiderato.** Un timestamp o
+  un `forge_deployment_id` dentro un file di configurazione lo fa
+  differire a ogni run: drift permanente, e se il task ha un handler
+  anche un **riavvio di servizio a ogni giro** (successo con sshd e
+  chrony). Lo stesso vale per un task che è un mezzo e non uno stato —
+  aggiornare la cache apt non cambia la macchina: va marcato
+  `changed_when: false`. I dati di esecuzione stanno in
+  `/etc/forge-ai/last-applied.json`, separati da `state.json`.
+- **`ufw` ha un proprio file di sysctl** (`/etc/ufw/sysctl.conf`, puntato
+  da `IPT_SYSCTL` in `/etc/default/ufw`) e lo riapplica a ogni
+  `ufw reload`, sovrascrivendo `/etc/sysctl.d/`. Se un valore continua a
+  tornare indietro, il colpevole è quello.
 - **Il vault è committato cifrato** a
   `ansible/inventories/poc/group_vars/all/vault.yml`, e `.gitattributes`
   lo marca `-text`: la conversione CRLF lo renderebbe indecifrabile su un

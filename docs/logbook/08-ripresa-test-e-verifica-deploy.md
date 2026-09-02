@@ -737,3 +737,93 @@ dimostrata una sola.
 
 Fino al punto 4 l'ambiente resta uno stato che nessuna procedura sa
 riprodurre.
+
+## Riconciliazione eseguita, e due difetti che solo lei poteva rivelare
+
+Percorso completato: branch pushato, host riportato con `git reset --hard`
+a un albero pulito su `0dd5066` (verificato prima che i 13 file coincidessero
+byte per byte con i commit, e che non ci fossero file non tracciati e non
+ignorati da perdere; `config/poc.yml`, `compose/.env` e `.vault-password`
+sopravvissuti perché ignorati), proxy riavviato, e ricostruzione dal
+repository.
+
+Config del proxy: `sha256` del file **dentro il container** e di quello nel
+repo ora coincidono (`7f7c6bb155c886dd`). Prima del riavvio erano diversi —
+il container serviva l'inode scollegato descritto sopra. Le tre rotte
+verificate: gitea 200, semaphore 200, webhook 401 (HMAC, come atteso).
+
+Poi la ricostruzione ha rivelato due difetti che il pscp aveva nascosto,
+perché entrambi si manifestano solo **attraverso il tempo**.
+
+### Bug 55 — un identificativo volatile dentro uno stato desiderato
+
+Il primo `make configure` da albero pulito ha riportato 5 task cambiati su
+`poc-ubuntu-01`. Non era il reset: `sshd-forge.conf.j2` e
+`chrony-forge.conf.j2` contenevano entrambi
+
+    # Deployment : {{ forge_deployment_id }}
+
+cioè un identificativo che cambia a ogni deployment, dentro un file di
+**configurazione**. Conseguenza doppia: drift permanente, e — poiché quei
+task hanno un handler — **riavvio di sshd e di chrony a ogni run**, per un
+commento cambiato. Riavviare sshd su un host remoto non è gratis.
+
+Perché non era mai emerso: `forge_deployment_id` deriva da
+`ansible_date_time`, che è un fact **cachato** per 3600 s. Dentro la
+finestra di cache il valore è stabile e i task sembrano idempotenti. È lo
+stesso meccanismo che aveva mascherato il marker di stato, e la stessa
+famiglia del task `Update the package cache`: **un valore volatile dentro
+uno stato desiderato**, tre volte nella stessa sessione.
+
+Rimedio: rimossa la riga dai due template, sostituita da un rimando a
+`/etc/forge-ai/last-applied.json`, che esiste esattamente per questo.
+
+Gli altri template che portano `forge_deployment_id`
+(`Autounattend.xml.j2`, `user-data.j2`, `domain.xml.j2`, `meta-data.j2`)
+**non** sono stati toccati: sono artefatti di provisioning, generati una
+volta per un'installazione, non riapplicati in loop come stato desiderato —
+e in `meta-data.j2` l'id fa parte dell'`instance-id`, dove cambiarlo ha un
+significato. Restano latenti `dnsmasq/provisioning.conf.j2` e
+`nginx/boot-server.conf.j2`, che sono config del control plane rese da un
+ruolo: stesso rischio, in un percorso che oggi non misuriamo. Segnalati, non
+corretti.
+
+### Bug 56 — ufw rimette a posto i sysctl dopo di noi
+
+Rimosso il bug 55, restava un task cambiato: `Apply kernel network
+hardening`, e un solo item, `net.ipv4.conf.all.log_martians`. Il valore
+letto sul target era 1, il file `/etc/sysctl.d/60-forge-ai.conf` lo
+conteneva, e il modulo eseguito da solo diceva `changed: false`. Quindi
+qualcosa lo azzerava **durante** la run.
+
+Prova diretta:
+
+    prima=1
+    ufw reload
+    dopo_ufw_reload=0
+
+`/etc/default/ufw` punta `IPT_SYSCTL` a `/etc/ufw/sysctl.conf`, che
+dichiara `net/ipv4/conf/all/log_martians=0` e viene riapplicato a ogni
+reload, sovrascrivendo `/etc/sysctl.d/`. Due gestori sulla stessa manopola.
+Non è solo rumore nel report: fra il task ufw e quello dei sysctl il
+controllo di hardening era **spento**.
+
+Rimedio: un `lineinfile` che allinea la dichiarazione di ufw a 1, invece di
+svuotare `IPT_SYSCTL` — che avrebbe disattivato anche tutti gli altri valori
+di quel file, un cambiamento molto più largo di quanto serva.
+
+### Esito, e perché stavolta vale di più
+
+    SMOKE TEST PASSED -- 23 checks    (exit 0)
+    [ ok ] poc-ubuntu-01   idempotence   0 task(s)
+    [ ok ] poc-windows-01  idempotence   0 task(s)
+
+Con una differenza sostanziale rispetto al verde di poche ore prima: la
+misura è stata presa **dopo aver azzerato la cache dei fact**
+(`rm -rf /tmp/forge-ai-facts`), cioè forzando un `deployment_id` nuovo ed
+esercitando davvero la condizione che faceva oscillare i task. Prima, lo
+zero era in parte un artefatto della finestra di cache.
+
+E l'ambiente da cui è stata presa è costruito dalla procedura: albero git
+pulito, config del proxy identica al repo. Il verde di adesso è della
+procedura, non del mio pscp — che era il punto sollevato da Daniele.

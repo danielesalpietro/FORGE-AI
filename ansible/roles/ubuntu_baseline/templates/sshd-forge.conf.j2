@@ -3,8 +3,14 @@
 # Rendered from roles/ubuntu_baseline/templates/sshd-forge.conf.j2
 # Managed state - edits here are drift and will be reverted.
 # =====================================================================
-# Deployment : {{ forge_deployment_id }}
 # Commit     : {{ forge_git_commit }}
+#
+# The deployment id deliberately does NOT appear here. It changes on
+# every run, so embedding it made this file differ every time, which
+# reported drift that was not drift AND notified "restart sshd" -- an
+# sshd restart on a remote host, for a changed comment. The run that
+# last wrote this file is recorded in /etc/forge-ai/last-applied.json.
+# See docs/logbook/08-ripresa-test-e-verifica-deploy.md.
 #
 # Files in /etc/ssh/sshd_config.d/ are read in lexical order and the
 # FIRST occurrence of a keyword wins. This file is 10-, so it takes

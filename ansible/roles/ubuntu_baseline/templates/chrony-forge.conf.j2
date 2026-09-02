@@ -3,7 +3,12 @@
 # Rendered from roles/ubuntu_baseline/templates/chrony-forge.conf.j2
 # Managed state - edits here are drift and will be reverted.
 # =====================================================================
-# Deployment : {{ forge_deployment_id }}
+# Commit     : {{ forge_git_commit }}
+#
+# No deployment id here on purpose: it changes every run, so it made
+# this file differ every time and notified "restart chrony" for nothing
+# but a comment. The run that last wrote it is in
+# /etc/forge-ai/last-applied.json.
 
 {% for server in provisioning_network.ntp_servers %}
 pool {{ server }} iburst maxsources 4
