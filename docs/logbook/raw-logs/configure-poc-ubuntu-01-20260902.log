@@ -1,0 +1,358 @@
+[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+[DEPRECATION WARNING]: community.general.yaml has been deprecated. The plugin has been superseded by the option `result_format=yaml` in callback plugin ansible.builtin.default from ansible-core 2.13 onwards. This feature will be removed from collection 'community.general' version 12.0.0.
+
+PLAY [Configure the Ubuntu targets] ********************************************
+
+TASK [Record when configuration started] ***************************************
+Wednesday 02 September 2026  18:26:07 +0000 (0:00:00.057)       0:00:00.057 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Confirm this is the host the inventory thinks it is] ***
+Wednesday 02 September 2026  18:26:07 +0000 (0:00:00.057)       0:00:00.115 *** 
+ok: [poc-ubuntu-01] => changed=false 
+  msg: poc-ubuntu-01 identity confirmed
+
+TASK [ubuntu_baseline : Set the hostname] **************************************
+Wednesday 02 September 2026  18:26:07 +0000 (0:00:00.063)       0:00:00.179 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Maintain /etc/hosts] ***********************************
+Wednesday 02 September 2026  18:26:10 +0000 (0:00:02.823)       0:00:03.002 *** 
+[WARNING]: Module remote_tmp /root/.ansible/tmp did not exist and was created with a mode of 0700, this may cause issues when running as another user. To avoid this, create the remote_tmp dir with the correct permissions manually
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Update the package cache] ******************************
+Wednesday 02 September 2026  18:26:11 +0000 (0:00:00.716)       0:00:03.719 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Install the baseline packages] *************************
+Wednesday 02 September 2026  18:26:21 +0000 (0:00:10.596)       0:00:14.316 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Apply pending security updates] ************************
+Wednesday 02 September 2026  18:26:29 +0000 (0:00:07.827)       0:00:22.143 *** 
+skipping: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Enable the QEMU guest agent] ***************************
+Wednesday 02 September 2026  18:26:29 +0000 (0:00:00.041)       0:00:22.185 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Include the automation account tasks] ******************
+Wednesday 02 September 2026  18:26:31 +0000 (0:00:01.216)       0:00:23.401 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/users.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Ensure the automation account exists with the expected properties] ***
+Wednesday 02 September 2026  18:26:31 +0000 (0:00:00.065)       0:00:23.467 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Install the authorised keys] ***************************
+Wednesday 02 September 2026  18:26:31 +0000 (0:00:00.838)       0:00:24.305 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Grant scoped passwordless sudo] ************************
+Wednesday 02 September 2026  18:26:32 +0000 (0:00:00.842)       0:00:25.148 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Lock the root account password] ************************
+Wednesday 02 September 2026  18:26:34 +0000 (0:00:01.813)       0:00:26.962 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Remove any sudo rule left by a previous tool] **********
+Wednesday 02 September 2026  18:26:35 +0000 (0:00:00.653)       0:00:27.615 *** 
+ok: [poc-ubuntu-01] => (item=/etc/sudoers.d/90-cloud-init-users)
+
+TASK [ubuntu_baseline : Include the SSH hardening tasks] ***********************
+Wednesday 02 September 2026  18:26:36 +0000 (0:00:00.718)       0:00:28.333 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/ssh.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Install the SSH hardening drop-in] *********************
+Wednesday 02 September 2026  18:26:36 +0000 (0:00:00.067)       0:00:28.401 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Install the login banner] ******************************
+Wednesday 02 September 2026  18:26:39 +0000 (0:00:03.120)       0:00:31.521 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Ensure sshd is enabled and running] ********************
+Wednesday 02 September 2026  18:26:40 +0000 (0:00:01.102)       0:00:32.624 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Apply the sshd changes now] ****************************
+Wednesday 02 September 2026  18:26:41 +0000 (0:00:00.805)       0:00:33.430 *** 
+
+RUNNING HANDLER [ubuntu_baseline : Restart sshd] *******************************
+Wednesday 02 September 2026  18:26:41 +0000 (0:00:00.005)       0:00:33.435 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Read the effective sshd configuration] *****************
+Wednesday 02 September 2026  18:26:41 +0000 (0:00:00.860)       0:00:34.295 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Assert the hardening actually took effect] *************
+Wednesday 02 September 2026  18:26:42 +0000 (0:00:00.729)       0:00:35.025 *** 
+ok: [poc-ubuntu-01] => changed=false 
+  msg: sshd policy verified against the effective configuration
+
+TASK [ubuntu_baseline : Include the firewall tasks] ****************************
+Wednesday 02 September 2026  18:26:42 +0000 (0:00:00.066)       0:00:35.091 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/firewall.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Allow SSH from the management networks] ****************
+Wednesday 02 September 2026  18:26:42 +0000 (0:00:00.163)       0:00:35.254 *** 
+changed: [poc-ubuntu-01] => (item=192.168.250.0/24)
+
+TASK [ubuntu_baseline : Set the default incoming policy] ***********************
+Wednesday 02 September 2026  18:26:44 +0000 (0:00:01.548)       0:00:36.803 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Set the default outgoing policy] ***********************
+Wednesday 02 September 2026  18:26:45 +0000 (0:00:00.920)       0:00:37.723 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Set the default routed policy] *************************
+Wednesday 02 September 2026  18:26:46 +0000 (0:00:00.873)       0:00:38.597 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Enable ufw with logging] *******************************
+Wednesday 02 September 2026  18:26:47 +0000 (0:00:00.873)       0:00:39.470 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Read the effective firewall state] *********************
+Wednesday 02 September 2026  18:26:49 +0000 (0:00:02.259)       0:00:41.729 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Assert the firewall is active and denying by default] ***
+Wednesday 02 September 2026  18:26:50 +0000 (0:00:00.669)       0:00:42.399 *** 
+ok: [poc-ubuntu-01] => changed=false 
+  msg: ufw active, default deny inbound, SSH scoped to 192.168.250.0/24
+
+TASK [ubuntu_baseline : Include the time synchronisation tasks] ****************
+Wednesday 02 September 2026  18:26:50 +0000 (0:00:00.068)       0:00:42.468 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/time.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Stop and disable systemd-timesyncd] ********************
+Wednesday 02 September 2026  18:26:50 +0000 (0:00:00.068)       0:00:42.536 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Configure chrony] **************************************
+Wednesday 02 September 2026  18:26:50 +0000 (0:00:00.762)       0:00:43.299 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Enable and start chrony] *******************************
+Wednesday 02 September 2026  18:26:52 +0000 (0:00:01.170)       0:00:44.469 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Set the timezone] **************************************
+Wednesday 02 September 2026  18:26:52 +0000 (0:00:00.818)       0:00:45.288 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Apply the chrony changes now] **************************
+Wednesday 02 September 2026  18:26:53 +0000 (0:00:00.949)       0:00:46.237 *** 
+
+RUNNING HANDLER [ubuntu_baseline : Restart chrony] *****************************
+Wednesday 02 September 2026  18:26:53 +0000 (0:00:00.004)       0:00:46.242 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Wait for the clock to synchronise] *********************
+Wednesday 02 September 2026  18:26:54 +0000 (0:00:00.911)       0:00:47.154 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Report the synchronisation result] *********************
+Wednesday 02 September 2026  18:27:04 +0000 (0:00:09.973)       0:00:57.127 *** 
+ok: [poc-ubuntu-01] => 
+  msg: Clock synchronised.
+
+TASK [ubuntu_baseline : Include the audit logging tasks] ***********************
+Wednesday 02 September 2026  18:27:04 +0000 (0:00:00.065)       0:00:57.193 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/audit.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Ensure auditd is installed] ****************************
+Wednesday 02 September 2026  18:27:04 +0000 (0:00:00.060)       0:00:57.253 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Install the FORGE-AI audit rules] **********************
+Wednesday 02 September 2026  18:27:14 +0000 (0:00:09.116)       0:01:06.370 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Enable and start auditd] *******************************
+Wednesday 02 September 2026  18:27:15 +0000 (0:00:01.158)       0:01:07.528 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Include the CIS-inspired demonstration controls] *******
+Wednesday 02 September 2026  18:27:16 +0000 (0:00:00.838)       0:01:08.366 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/cis-demo.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Disable uncommon filesystem modules] *******************
+Wednesday 02 September 2026  18:27:16 +0000 (0:00:00.080)       0:01:08.447 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Apply kernel network hardening] ************************
+Wednesday 02 September 2026  18:27:17 +0000 (0:00:01.090)       0:01:09.537 *** 
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.all.accept_redirects = 0)
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.default.accept_redirects = 0)
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.all.secure_redirects = 0)
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.all.accept_source_route = 0)
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.default.accept_source_route = 0)
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.all.log_martians = 1)
+changed: [poc-ubuntu-01] => (item=net.ipv4.icmp_echo_ignore_broadcasts = 1)
+changed: [poc-ubuntu-01] => (item=net.ipv4.icmp_ignore_bogus_error_responses = 1)
+changed: [poc-ubuntu-01] => (item=net.ipv4.tcp_syncookies = 1)
+changed: [poc-ubuntu-01] => (item=net.ipv4.conf.all.rp_filter = 1)
+changed: [poc-ubuntu-01] => (item=net.ipv6.conf.all.accept_redirects = 0)
+changed: [poc-ubuntu-01] => (item=net.ipv6.conf.all.accept_source_route = 0)
+changed: [poc-ubuntu-01] => (item=kernel.randomize_va_space = 2)
+changed: [poc-ubuntu-01] => (item=kernel.dmesg_restrict = 1)
+changed: [poc-ubuntu-01] => (item=fs.suid_dumpable = 0)
+
+TASK [ubuntu_baseline : Set restrictive permissions on sensitive files] ********
+Wednesday 02 September 2026  18:27:26 +0000 (0:00:09.547)       0:01:19.085 *** 
+ok: [poc-ubuntu-01] => (item=/etc/passwd)
+ok: [poc-ubuntu-01] => (item=/etc/shadow)
+ok: [poc-ubuntu-01] => (item=/etc/group)
+ok: [poc-ubuntu-01] => (item=/etc/gshadow)
+changed: [poc-ubuntu-01] => (item=/etc/ssh/sshd_config)
+ok: [poc-ubuntu-01] => (item=/boot/grub/grub.cfg)
+
+TASK [ubuntu_baseline : Configure unattended security upgrades] ****************
+Wednesday 02 September 2026  18:27:29 +0000 (0:00:02.898)       0:01:21.983 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : State the scope of these controls in the run output] ***
+Wednesday 02 September 2026  18:27:30 +0000 (0:00:01.118)       0:01:23.102 *** 
+ok: [poc-ubuntu-01] => 
+  msg: 'Applied CIS-INSPIRED demonstration controls. This is NOT a CIS benchmark run and must not be reported as CIS conformance: a real assessment covers several hundred controls with evidence collection. See roles/ubuntu_baseline/README.md and docs/LIMITATIONS.md.'
+
+TASK [ubuntu_baseline : Create the FORGE-AI state directory] *******************
+Wednesday 02 September 2026  18:27:30 +0000 (0:00:00.060)       0:01:23.162 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Record the applied desired state] **********************
+Wednesday 02 September 2026  18:27:31 +0000 (0:00:00.522)       0:01:23.685 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Install the health check command] **********************
+Wednesday 02 September 2026  18:27:32 +0000 (0:00:01.185)       0:01:24.871 *** 
+changed: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Include the reboot handling] ***************************
+Wednesday 02 September 2026  18:27:33 +0000 (0:00:01.118)       0:01:25.989 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/reboot.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Check whether the system requests a reboot] ************
+Wednesday 02 September 2026  18:27:33 +0000 (0:00:00.059)       0:01:26.049 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Read what asked for the reboot] ************************
+Wednesday 02 September 2026  18:27:34 +0000 (0:00:00.509)       0:01:26.559 *** 
+skipping: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Report the pending reboot] *****************************
+Wednesday 02 September 2026  18:27:34 +0000 (0:00:00.042)       0:01:26.601 *** 
+skipping: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Reboot and wait for the host to come back] *************
+Wednesday 02 September 2026  18:27:34 +0000 (0:00:00.057)       0:01:26.658 *** 
+skipping: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Include the final validation] **************************
+Wednesday 02 September 2026  18:27:34 +0000 (0:00:00.045)       0:01:26.704 *** 
+included: /home/dsalpietro/FORGE-AI/ansible/roles/ubuntu_baseline/tasks/validate.yml for poc-ubuntu-01
+
+TASK [ubuntu_baseline : Collect the service states] ****************************
+Wednesday 02 September 2026  18:27:34 +0000 (0:00:00.063)       0:01:26.767 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Assert the expected services are running] **************
+Wednesday 02 September 2026  18:27:41 +0000 (0:00:06.963)       0:01:33.731 *** 
+ok: [poc-ubuntu-01] => (item=ssh) => changed=false 
+  ansible_loop_var: item
+  item: ssh
+  msg: ssh is running
+ok: [poc-ubuntu-01] => (item=qemu-guest-agent) => changed=false 
+  ansible_loop_var: item
+  item: qemu-guest-agent
+  msg: qemu-guest-agent is running
+ok: [poc-ubuntu-01] => (item=chrony) => changed=false 
+  ansible_loop_var: item
+  item: chrony
+  msg: chrony is running
+ok: [poc-ubuntu-01] => (item=auditd) => changed=false 
+  ansible_loop_var: item
+  item: auditd
+  msg: auditd is running
+
+TASK [ubuntu_baseline : Run the health check] **********************************
+Wednesday 02 September 2026  18:27:41 +0000 (0:00:00.138)       0:01:33.870 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Publish the health result] *****************************
+Wednesday 02 September 2026  18:27:42 +0000 (0:00:01.008)       0:01:34.878 *** 
+ok: [poc-ubuntu-01]
+
+TASK [ubuntu_baseline : Report the health check] *******************************
+Wednesday 02 September 2026  18:27:42 +0000 (0:00:00.078)       0:01:34.957 *** 
+ok: [poc-ubuntu-01] => 
+  msg: |-
+    poc-ubuntu-01 health: ok
+      [ok]   hostname: poc-ubuntu-01
+      [ok]   automation-user: forgeops exists
+      [ok]   service:ssh: active
+      [ok]   service:qemu-guest-agent: active
+      [ok]   service:chrony: active
+      [ok]   service:auditd: active
+      [ok]   ssh-root-login: permitrootlogin no
+      [ok]   ssh-password-auth: passwordauthentication no
+      [ok]   firewall: Status: active
+      [ok]   desired-state: commit unknown applied 2026-09-02T18:07:16Z
+      [ok]   login-banner: matches desired state
+
+TASK [ubuntu_baseline : Fail when the health check reports a problem] **********
+Wednesday 02 September 2026  18:27:42 +0000 (0:00:00.097)       0:01:35.055 *** 
+skipping: [poc-ubuntu-01]
+
+RUNNING HANDLER [ubuntu_baseline : Restart auditd] *****************************
+Wednesday 02 September 2026  18:27:42 +0000 (0:00:00.076)       0:01:35.131 *** 
+changed: [poc-ubuntu-01]
+
+TASK [Record the configuration result] *****************************************
+Wednesday 02 September 2026  18:27:43 +0000 (0:00:01.043)       0:01:36.175 *** 
+ok: [poc-ubuntu-01]
+
+TASK [Advance the lifecycle state to 'ready'] **********************************
+Wednesday 02 September 2026  18:27:43 +0000 (0:00:00.075)       0:01:36.251 *** 
+ok: [poc-ubuntu-01 -> localhost]
+
+PLAY [Configure the Windows targets] *******************************************
+skipping: no hosts matched
+
+PLAY RECAP *********************************************************************
+poc-ubuntu-01              : ok=60   changed=20   unreachable=0    failed=0    skipped=5    rescued=0    ignored=0   
+
+
+TASKS RECAP ********************************************************************
+Wednesday 02 September 2026  18:27:44 +0000 (0:00:00.923)       0:01:37.174 *** 
+=============================================================================== 
+ubuntu_baseline : Update the package cache ----------------------------- 10.60s
+ubuntu_baseline : Wait for the clock to synchronise --------------------- 9.97s
+ubuntu_baseline : Apply kernel network hardening ------------------------ 9.55s
+ubuntu_baseline : Ensure auditd is installed ---------------------------- 9.12s
+ubuntu_baseline : Install the baseline packages ------------------------- 7.83s
+ubuntu_baseline : Collect the service states ---------------------------- 6.96s
+ubuntu_baseline : Install the SSH hardening drop-in --------------------- 3.12s
+ubuntu_baseline : Set restrictive permissions on sensitive files -------- 2.90s
+ubuntu_baseline : Set the hostname -------------------------------------- 2.82s
+ubuntu_baseline : Enable ufw with logging ------------------------------- 2.26s
+ubuntu_baseline : Grant scoped passwordless sudo ------------------------ 1.81s
+ubuntu_baseline : Allow SSH from the management networks ---------------- 1.55s
+ubuntu_baseline : Enable the QEMU guest agent --------------------------- 1.22s
+ubuntu_baseline : Record the applied desired state ---------------------- 1.19s
+ubuntu_baseline : Configure chrony -------------------------------------- 1.17s
+ubuntu_baseline : Install the FORGE-AI audit rules ---------------------- 1.16s
+ubuntu_baseline : Configure unattended security upgrades ---------------- 1.12s
+ubuntu_baseline : Install the health check command ---------------------- 1.12s
+ubuntu_baseline : Install the login banner ------------------------------ 1.10s
+ubuntu_baseline : Disable uncommon filesystem modules ------------------- 1.09s
+
+PLAYBOOK RECAP *****************************************************************
+Playbook run took 0 days, 0 hours, 1 minutes, 37 seconds
+

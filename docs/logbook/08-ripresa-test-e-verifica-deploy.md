@@ -213,6 +213,47 @@ Cinque punti, da eseguire in ordine, uno alla volta:
    vive solo sul branch di lavoro mentre `develop` è il branch a cui è
    agganciata tutta la catena automatica.
 
-## Punto 1 — `make configure` su poc-ubuntu-01
+## Punto 1 — `make configure` su poc-ubuntu-01: **riuscito**
 
-*(in esecuzione; esito registrato qui sotto a valle del run)*
+Eseguito limitato al solo target Linux, per non toccare la metà Windows
+prima di aver sistemato il bug 45:
+
+    make configure ANSIBLE_ARGS="--limit poc-ubuntu-01"
+
+Esito: **exit 0**, `ok=60 changed=20 unreachable=0 failed=0 skipped=5`,
+1 minuto e 37 secondi. Log grezzo conservato in
+`docs/logbook/raw-logs/configure-poc-ubuntu-01-20260902.log` (verificato
+privo di segreti prima del commit).
+
+I 20 `changed` sono il baseline che non era mai stato applicato fino in
+fondo: hardening kernel/rete, auditd installato e regole FORGE-AI, ufw
+abilitato con logging, drop-in SSH, chrony, unattended-upgrades, sudo
+scoped, banner di login, moduli filesystem non comuni disabilitati, e
+l'installazione del comando di health check.
+
+Verifica degli effetti, non della sola exit code — tutti e tre i difetti
+che avevano motivato il punto 1 sono chiusi:
+
+| Difetto rilevato prima | Dopo |
+|---|---|
+| `/usr/local/bin/forge-health` assente | installato, `-rwxr-xr-x`, **`ok (0 failing)`** su 11 controlli |
+| 7 task cambierebbero ancora in check mode | **0 task** |
+| lifecycle state `configuring` | **`ready`** |
+
+In più, un effetto collaterale positivo non previsto: il firewall, che
+lo smoke test riportava `Status: inactive` (e passava comunque il
+check), ora è `Status: active`.
+
+Smoke test finale sul target:
+
+    ./scripts/smoke-test.sh --host poc-ubuntu-01
+    → SMOKE TEST PASSED -- 12 checks, exit 0
+
+Da notare per onestà di registro: quel `PASSED` vale solo perché è stato
+invocato con `--host`. Senza il filtro, il bug 47 lo renderebbe di nuovo
+un verdetto su metà flotta. È il motivo per cui il punto 2 viene subito
+dopo.
+
+**Stato della metà Linux del PoC dopo il punto 1: verde end-to-end** —
+installazione PXE, baseline, health check, idempotenza, e la catena
+GitOps fino ad Ansible (task Semaphore 10, `poc-ubuntu-01 ok=6`).
