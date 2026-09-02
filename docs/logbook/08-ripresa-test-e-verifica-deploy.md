@@ -635,22 +635,26 @@ Verifiche eseguite:
 
 `make test`: 216 pytest, invariato. Nessun test copre `proxy.conf`.
 
-### Quello che NON è stato verificato dal vivo
+### Il recupero su cambio d'indirizzo: verificato sul ferro
 
-Il recupero su un cambio d'indirizzo reale. Ho provato a riprodurlo
-ricreando `forge-gitea`, poi `forge-gitea` e `forge-webhook` insieme:
-Docker ha riassegnato entrambe le volte gli stessi indirizzi (`.5` e
-`.6`), quindi lo scenario non si è riprodotto. Il test deterministico —
-fermare Gitea, occupare il suo indirizzo con un container usa-e-getta,
-riavviarlo perché ne prenda un altro, e interrogare il proxy **senza
-riavviarlo** — è stato bloccato dal classificatore, correttamente:
-ferma un servizio e lancia un container arbitrario.
+Ricreare i container non bastava a riprodurre lo scenario — Docker
+riassegnava ogni volta gli stessi indirizzi (`.5` e `.6`) — e il test
+deterministico è stato bloccato dal classificatore, correttamente:
+ferma un servizio e lancia un container arbitrario. Eseguito quindi da
+Daniele:
 
-Quindi: il meccanismo è comportamento documentato di nginx, la
-configurazione è valida e le tre rotte funzionano con la semantica dei
-path corretta. Che il proxy segua un container che cambia indirizzo
-resta da dimostrare sul ferro, con il comando consegnato a Daniele.
-Registrato come non verificato, non come fatto.
+    docker stop forge-gitea
+    docker run -d --name squat --network forge-backend alpine:3.20 sleep 120
+    docker start forge-gitea
+    → gitea ora: 172.28.240.10
+    → via proxy NON riavviato: 200
+
+Gitea è stato **costretto** su un indirizzo diverso (`.10` invece di
+`.5`) e il proxy, mai riavviato né ricaricato dopo lo spostamento, lo ha
+seguito da solo: **200**. Nelle stesse condizioni, prima di questa
+modifica, la risposta era 502.
+
+**Bug 46 chiuso, causa compresa e rimedio dimostrato.**
 
 ## Nota di onestà: quante installazioni from scratch in questa sessione
 
@@ -679,3 +683,57 @@ Una prova reale richiede di azzerare lo stato di lifecycle
 `max_install_attempts: 3` e i due host sono a 2 e 1) e rilanciare il
 provisioning — distruggendo lo stato verde appena raggiunto, che per un
 PoC è esattamente ciò che si deve poter fare.
+
+## Nota di metodo: l'ambiente è disallineato dalla procedura che lo costruisce
+
+Richiamo di Daniele a fine sessione, e va registrato perché riguarda
+tutto il lavoro fatto oggi:
+
+> FORGE-AI fa il deploy di questa installazione di Ubuntu. Cambiare al
+> volo il setup comporta disallineare l'ambiente dalla procedura di
+> costruzione. Eventuali modifiche apportate "al volo" andranno
+> integrate e testate nuovamente con un nuovo deploy.
+
+Ha ragione, ed è più affilato del semplice "i file coincidono". Verifica
+fatta: i 13 file modificati sull'host sono **byte per byte identici** ai
+commit locali (confronto degli hash con `git hash-object` sull'host
+contro `git rev-parse HEAD:<file>` in locale). Quindi non c'è deriva di
+contenuto. Ma lo **stato** dell'ambiente è stato prodotto da un percorso
+che non è la procedura:
+
+1. I file sono arrivati con `pscp`, non con un `git pull`. Il git
+   dell'host dichiara `HEAD=0e66d43` con 13 file "modificati": chi lo
+   legge conclude che l'ambiente è a `0e66d43`, ed è falso.
+2. La modifica a nginx ha avuto effetto con `nginx -s reload` su un file
+   montato, non attraverso `make deploy-control-plane`. Che funzioni è
+   una proprietà del mount, non una procedura seguita.
+3. I ruoli hanno avuto effetto con `make configure` lanciato dal working
+   tree dell'host, non da un albero pulito proveniente dal repository.
+4. **Il punto che morde davvero**: niente è stato pushato. `develop`, il
+   mirror Gitea e quindi Semaphore clonano ancora codice **privo di
+   tutte le correzioni di oggi**. Una run Semaphore in questo momento
+   userebbe il vecchio smoke test e i vecchi ruoli. L'anello GitOps *è*
+   la procedura di deploy, e oggi non contiene nulla del lavoro di oggi.
+
+Il verde misurato a mano su questo host non dice quindi niente sul verde
+della pipeline. Sono due affermazioni diverse e finora ne è stata
+dimostrata una sola.
+
+### Percorso di riconciliazione
+
+1. push del branch, PR, merge su `develop` (assorbe anche il punto 5,
+   il commit `0e66d43` mai arrivato su develop);
+2. sull'host, tornare a un albero pulito: `git fetch` e reset sul commit
+   mergiato. Poiché gli hash coincidono già, il reset non perde nulla —
+   ed è proprio questa la proprietà che rende il passaggio sicuro e che
+   va verificata *prima*, non dopo;
+3. rieseguire il percorso di costruzione dal repository:
+   `make deploy-control-plane` (ricrea il proxy dalla config versionata)
+   e `make configure`;
+4. ri-misurare con `make smoke-test`, che deve tornare 23/23;
+5. e per chiudere davvero il cerchio, un `make provision` from scratch —
+   che è anche la risposta alla domanda registrata nella sezione
+   precedente.
+
+Fino al punto 4 l'ambiente resta uno stato che nessuna procedura sa
+riprodurre.
