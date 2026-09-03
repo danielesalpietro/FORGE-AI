@@ -96,6 +96,70 @@
   no_log: true
   tags: [bootstrap, gitops]
 
+# The tasks above only CREATE, guarded by "does a template with this name
+# already exist". That left the role blind to templates that exist but
+# are configured wrongly -- and every template created before the vault
+# was committed has no vault attached, so every run through them dies
+# with "Attempting to decrypt but no vault secrets found": the
+# credentials look wrong when in fact none were configured. Creating
+# only is not converging; a role that manages a resource has to correct
+# it, not merely conjure it. (Bug 45, docs/logbook/08-*.md.)
+#
+# This runs AFTER the re-read on purpose, so it also covers templates
+# created a moment ago by the tasks above.
+#
+# The current state is read one template at a time because the LIST
+# endpoint returns `vaults: null` for every template, attached or not.
+# Deciding from the list would make this task rewrite the association on
+# every run -- converged, but never idempotent, which is exactly the
+# defect this role's own drift report is supposed to catch.
+#
+# The vault goes in the `vaults` ARRAY, not in the scalar vault_key_id
+# that the same object also carries. Verified against the live API
+# (Semaphore v2.10.34, 2026-09-03): a PUT setting vault_key_id returns
+# 204 and silently changes nothing, which is the worst possible answer.
+# PUT replaces the whole object, so each template is sent back as read
+# with only that field corrected.
+- name: Read each template's current vault association
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/templates/{{ item.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+    status_code: [200]
+  register: forge_semaphore_template_details
+  loop: "{{ forge_semaphore_templates_final.json }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  no_log: true
+  tags: [bootstrap, gitops]
+
+- name: Attach the vault to templates that lack it
+  ansible.builtin.uri:
+    url: "{{ semaphore_api_url }}/project/{{ forge_semaphore_project_id }}/templates/{{ item.json.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ vault_semaphore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: >-
+      {{ item.json | combine({'vaults': [{'vault_key_id': forge_semaphore_key_ids['forge-ai-vault'] | int,
+                                          'type': 'password', 'name': none}]}) }}
+    status_code: [200, 204]
+  loop: "{{ forge_semaphore_template_details.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  # `| default([])` guards the templates that carry no vaults key at all;
+  # rejectattr on the loop would raise on the missing attribute rather
+  # than treat it as "does not match".
+  when:
+    - forge_semaphore_key_ids['forge-ai-vault'] is defined
+    - (item.json.vaults | default([]) | map(attribute='vault_key_id') | list)
+      != [forge_semaphore_key_ids['forge-ai-vault'] | int]
+  no_log: true
+  tags: [bootstrap, gitops]
+
 - name: Publish the template routing for the webhook receiver
   ansible.builtin.set_fact:
     forge_template_routes: >-

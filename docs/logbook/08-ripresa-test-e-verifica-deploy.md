@@ -827,3 +827,73 @@ zero era in parte un artefatto della finestra di cache.
 E l'ambiente da cui è stata presa è costruito dalla procedura: albero git
 pulito, config del proxy identica al repo. Il verde di adesso è della
 procedura, non del mio pscp — che era il punto sollevato da Daniele.
+
+## La CI vede questo lavoro per la prima volta (PR #40)
+
+I workflow scattano su `pull_request` o su push a `main`/`develop`: i push
+sul branch non avevano mai esercitato nulla. Aperta la PR #40, due job rossi,
+entrambi legittimi.
+
+**`validate`** — `Attempting to decrypt but no vault secrets found`.
+Conseguenza diretta e prevedibile dell'aver committato il vault: ogni comando
+che carica `group_vars` (syntax-check e `ansible-inventory`) ora deve
+decifrarlo, e la CI non ha la password.
+
+E non deve averla: è proprio il fatto che quella password non lasci l'host a
+rendere accettabile la pubblicazione del ciphertext. Ma quei check validano la
+**struttura**, non i segreti. Aggiunto quindi un passo che ricifra
+`vault.yml.example` sotto una password casuale usa-e-getta: ogni variabile
+risolve, i check continuano a provare che i `group_vars` si parsificano e che
+ogni host ha una connessione, e niente di reale viene esposto. L'esempio porta
+esattamente le stesse dieci chiavi del vault vero — verificato — il che rende
+la sostituzione fedele.
+
+**`lint`** — 18 violazioni markdown in `docs/VRTX-ASSESSMENT.md` e
+`docs/accesso_logico.md`, documenti della sessione VRTX precedente mai passati
+dal lint. Corrette senza toccare il contenuto. Il primo tentativo ha inserito
+la riga vuota **prima** dell'intestazione in grassetto invece che fra questa e
+la lista, producendo MD012 al posto di MD032: sistemato al secondo giro.
+
+Esito: **tutti e tre i job verdi** su `f92a186` (lint, validate, security).
+
+## Bug 57 — Semaphore ignora `vault_key_id` e non lo dice
+
+Prima di mergiare (il merge fa scattare l'automazione), verifica dello stato di
+Semaphore. Il template 10 aveva `vault_key_id: null` mentre la chiave
+`forge-ai-vault` esisteva nel Key Store come id 4. Mergiare avrebbe prodotto
+una run che clona il vault cifrato **senza poterlo decifrare**: lo stesso
+errore appena visto in CI.
+
+Due difetti nel ruolo `semaphore_config`, non uno:
+
+1. **non impostava affatto** il vault sulle template;
+2. **creava soltanto**, con la guardia "esiste già una template con questo
+   nome?" — quindi era cieco a template esistenti ma configurate male. È il
+   "gap di riconciliazione" già annotato nel logbook 07. Creare non è
+   convergere: un ruolo che gestisce una risorsa deve correggerla, non solo
+   evocarla.
+
+E poi la scoperta vera, trovata solo provando l'API a mano invece di fidarsi
+del nome del campo. Una `PUT` che imposta `vault_key_id` risponde **204** e
+**non cambia nulla**: il campo esiste nell'oggetto, viene accettato, e viene
+ignorato in silenzio. La configurazione vive nell'array **`vaults`**:
+
+    "vaults": [{"vault_key_id": 4, "type": "password", "name": null}]
+
+Un 204 che non applica niente è il modo peggiore di fallire — lo stesso schema
+del bug 45, dove una password vuota veniva riportata come "credenziali
+rifiutate".
+
+Terza trappola sulla stessa API: l'endpoint **lista** restituisce
+`vaults: null` per ogni template, attaccata o meno. Decidere da lì rendeva il
+task non idempotente (riscriveva l'associazione a ogni run — visibile dall'id
+della riga che passava da 2 a 12). Il ruolo ora legge il dettaglio di ogni
+template e corregge solo quelle che ne hanno bisogno.
+
+Verificato dopo l'applicazione: tutte e 13 le template riportano `vault=4`, e
+la run successiva le salta (`changed=0`, task skipped) — attaccato **e**
+idempotente.
+
+Tutto questo nel ruolo, non con una `PATCH` a mano: una correzione via API
+sarebbe stata esattamente la modifica "al volo" contro cui mette in guardia la
+sezione precedente.
