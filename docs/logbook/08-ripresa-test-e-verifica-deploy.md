@@ -897,3 +897,69 @@ idempotente.
 Tutto questo nel ruolo, non con una `PATCH` a mano: una correzione via API
 sarebbe stata esattamente la modifica "al volo" contro cui mette in guardia la
 sezione precedente.
+
+## Il merge, e il bug 45 finalmente chiuso end-to-end
+
+PR #40 mergiata su `develop` (`d98b52d`) con i tre job CI verdi. Il mirror
+Gitea ha sincronizzato dopo ~7 minuti, il webhook ha consegnato
+(`push to develop: 32 changed path(s) -> template 10`) e Semaphore ha
+accettato (HTTP 201): task **11**.
+
+**Il vault vero è arrivato a Semaphore.** Il task 11 attraversa WinRM su
+`poc-windows-01` — autenticazione riuscita — ed esegue i controlli SMB fino
+in fondo:
+
+    TASK [windows_baseline : Assert SMBv1 is disabled]
+    ok: [poc-windows-01] => {"changed": false, "msg": "SMBv1 disabled"}
+
+Dopo dieci task consecutivi falliti su "ntlm: credentials rejected", questa è
+la chiusura del **bug 45**: il clone di Semaphore decifra il vault committato
+e si autentica con le credenziali vere.
+
+## Bug 58 — le collection del container non soddisfano requirements.yml
+
+Il task 11 finisce comunque in errore, ma molto più avanti e per un'altra
+ragione:
+
+    ERROR! couldn't resolve module/action 'ansible.windows.win_firewall'
+
+Lo stesso ruolo gira senza problemi sull'host (`ok: [poc-windows-01]` sul task
+"Enable every firewall profile with inbound blocked"). La differenza sta negli
+ambienti:
+
+| | `ansible.windows` | `community.windows` |
+|---|---|---|
+| Host (venv del repo) | **3.8.0** | **3.3.0** |
+| Container Semaphore | 2.3.0 | 2.2.0 |
+
+`win_firewall` non esiste in `ansible.windows` 2.3.0. E il punto non è solo lo
+scarto: `ansible/requirements.yml` pinna `ansible.windows >=2.5.0,<4.0.0`,
+quindi **il container viola il requisito dichiarato dal progetto stesso**.
+Nessuno se ne era accorto perché nessuna run era mai arrivata così avanti.
+
+`ansible/collections/` è gitignored, quindi il clone di Semaphore non riceve
+mai le collection: dipende interamente da quelle che l'immagine porta con sé.
+
+È il terzo elemento che chiede la stessa cosa — un'immagine Semaphore
+personalizzata. Gli altri due sono già a logbook 07: `jsonschema` installato
+via pip nel container (annotato allora come "EFFIMERO: da portare in
+un'immagine custom") e la versione di ansible-core. Installare le collection a
+mano nel container ripeterebbe lo stesso errore: uno stato che nessuna
+procedura sa riprodurre, e che il primo `docker compose up --force-recreate`
+cancella.
+
+Non corretto in questa sessione: costruire un'immagine e cambiare il compose è
+lavoro sostanziale, e va fatto come modifica versionata, non a caldo.
+
+## Dove si ferma la sessione
+
+Chiuso: bug 45 (end-to-end, provato), 46-57. La metà Linux dell'anello GitOps
+funziona da Semaphore; la metà Windows si autentica e arriva fino alla
+configurazione del firewall.
+
+Aperto e caratterizzato: bug 58 (collection del container), e la domanda
+iniziale — nessuna installazione from scratch è stata eseguita. Per
+quest'ultima esiste già `.github/workflows/e2e-selfhosted.yml`, che fa il giro
+completo (`bootstrap`, `prepare-media`, `make deploy`, validate, smoke test,
+idempotenza, drift, reconcile) ogni sabato alle 02:00 — ma non è **mai** stato
+eseguito: `gh api .../actions/runners` riporta `total_count: 0`. È la issue #10.
