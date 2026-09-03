@@ -227,6 +227,28 @@ jobs:
           pip install --disable-pip-version-check \
             "ansible>=10,<13" "jsonschema>=4.21,<5"
 
+      # The vault is committed encrypted, so every command that loads
+      # group_vars -- the syntax check and the inventory build below --
+      # now needs to decrypt it. CI must NOT be able to: the vault
+      # password is what makes publishing the ciphertext acceptable, and
+      # it stays on the operator's host and in the Semaphore Key Store.
+      #
+      # These checks validate structure, not secrets. So re-encrypt the
+      # placeholder example under a random throwaway password: every
+      # variable resolves, the checks still prove that group_vars parse
+      # and that every host has a connection, and nothing real is
+      # exposed. The example carries exactly the same ten keys as the
+      # real vault, which is what makes the substitution faithful.
+      - name: Substitute a throwaway vault for the encrypted one
+        run: |
+          openssl rand -hex 32 > .vault-password
+          cp ansible/inventories/poc/group_vars/all/vault.yml.example \
+             ansible/inventories/poc/group_vars/all/vault.yml
+          ansible-vault encrypt \
+            --vault-password-file .vault-password \
+            ansible/inventories/poc/group_vars/all/vault.yml
+          echo "ANSIBLE_VAULT_PASSWORD_FILE=$PWD/.vault-password" >> "$GITHUB_ENV"
+
       - name: Syntax-check every playbook
         working-directory: ansible
         run: |

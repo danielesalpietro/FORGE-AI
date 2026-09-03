@@ -38,7 +38,9 @@ l'utente al momento in chat.
 
 ## Rete secondaria osservata sulle blade
 
-- `vmk1` su subnet separata `192.168.30.0/24` (Server-2: `.159`, Server-3: `.172`) — statica, verosimilmente vMotion/storage. Nessun accesso diretto tentato su questa subnet.
+- `vmk1` su subnet separata `192.168.30.0/24` (Server-2: `.159`,
+  Server-3: `.172`) — statica, verosimilmente vMotion/storage. Nessun
+  accesso diretto tentato su questa subnet.
 
 ## Host verificati e scartati (fuori scope)
 
@@ -55,6 +57,13 @@ l'utente al momento in chat.
 
 ## Strumenti/pattern di accesso verificati in questa sessione
 
-- Login SSH interattivo con password su dispositivi Dell (CMC/iDRAC) via `plink -ssh -pw "<password>" root@<ip> "<comando>"`, con `echo y |` o `printf 'y\n' |` per accettare l'host key alla prima connessione
-- Il CMC espone una shell `racadm` (non POSIX): un comando per invocazione, nessun `;` come separatore
-- Le iDRAC delle blade **non sono raggiungibili in rete finché lo chassis è spento** — serve prima `chassisaction powerup` (chassis) e poi `serveraction -m server-<n> powerup` (blade specifica)
+- Login SSH interattivo con password su dispositivi Dell (CMC/iDRAC) via
+  `plink -ssh -pw "<password>" root@<ip> "<comando>"`, con `echo y |` o
+  `printf 'y\n' |` per accettare l'host key alla prima connessione.
+  Preferire `plink -pwfile <file>`: a differenza di `-pw`, non espone la
+  password nella command line del processo
+- Il CMC espone una shell `racadm` (non POSIX): un comando per
+  invocazione, nessun `;` come separatore
+- Le iDRAC delle blade **non sono raggiungibili in rete finché lo chassis
+  è spento** — serve prima `chassisaction powerup` (chassis) e poi
+  `serveraction -m server-<n> powerup` (blade specifica)

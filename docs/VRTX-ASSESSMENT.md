@@ -147,17 +147,27 @@ Service Tag di Server-2 letto dal CMC.
 | NTP | disabilitato, nessun server configurato, tempo non sincronizzato |
 | DNS | 192.168.1.1 |
 
+
 **Rete:**
 - `vmk0`: 192.168.1.159/24, DHCP, gateway 192.168.1.1 (management)
-- `vmk1`: 192.168.30.159/24, statico — rete separata (VLAN/subnet dedicata, verosimilmente vMotion o storage)
-- 2× NIC fisiche (vmnic0/1, Broadcom BCM5720 1GbE, driver `ntg3`), entrambe Up, MTU 9000 (jumbo frame)
-- `vSwitch0`: uplink vmnic0+vmnic1, 5 port group — `Management Network`, `VM Network`, `VM Network DMZ`, `VM Network Internal`, `VM Motion`
+- `vmk1`: 192.168.30.159/24, statico — rete separata (VLAN/subnet dedicata,
+  verosimilmente vMotion o storage)
+- 2× NIC fisiche (vmnic0/1, Broadcom BCM5720 1GbE, driver `ntg3`), entrambe Up,
+  MTU 9000 (jumbo frame)
+- `vSwitch0`: uplink vmnic0+vmnic1, 5 port group — `Management Network`, `VM
+  Network`, `VM Network DMZ`, `VM Network Internal`, `VM Motion`
+
 
 **Storage locale (indipendente dallo storage condiviso VRTX):**
-- Adapter `vmhba1` = Broadcom/PERC H710 Mini locale della blade (**diverso** dai controller Shared PERC8 del chassis) — questo è lo storage "di bordo" della blade, non quello condiviso
-- Datastore VMFS-6 locale (`datastore (159)`, ~162 GB, 160 GB liberi) + partizione OS-DATA (~129 GB) + due BOOTBANK (boot ESXi)
+- Adapter `vmhba1` = Broadcom/PERC H710 Mini locale della blade (**diverso** dai
+  controller Shared PERC8 del chassis) — questo è lo storage "di bordo" della
+  blade, non quello condiviso
+- Datastore VMFS-6 locale (`datastore (159)`, ~162 GB, 160 GB liberi) +
+  partizione OS-DATA (~129 GB) + due BOOTBANK (boot ESXi)
 - Datastore NFS `NFS_ISOImages` configurato ma **non montato**
-- **Nessun datastore proveniente dallo storage condiviso del chassis** risulta montato — coerente con Virtual Adapter Access Policy ancora `No Access`, come da istruzione di tenere lo storage unshared durante il boot
+- **Nessun datastore proveniente dallo storage condiviso del chassis** risulta
+  montato — coerente con Virtual Adapter Access Policy ancora `No Access`,
+  come da istruzione di tenere lo storage unshared durante il boot
 
 **VM registrate:** nessuna.
 
@@ -185,6 +195,7 @@ Server-2: 22380479) — l'agente OS/CIM che alimenta questo dato nell'iDRAC
 gira solo se il sistema operativo è effettivamente up, quindi **nessun
 problema di boot su Server-3**.
 
+
 **Hardware (da `racadm hwinventory`):**
 - 2× CPU Intel Xeon (famiglia Haswell-EP), 6 core / 12 thread ciascuna,
   clock corrente 2400 MHz (max turbo 3600 MHz), cache L3 15360 KB —
@@ -209,11 +220,15 @@ dall'iDRAC — stesso host, due percorsi di verifica indipendenti.
 | NTP | disabilitato |
 | DNS | 192.168.1.1 |
 
+
 **Rete:**
 - `vmk0`: 192.168.1.173/24, DHCP (management)
 - `vmk1`: 192.168.30.172/24, statico (stessa subnet 30 di Server-2, IP diverso)
 - vmnic0/1 Broadcom BCM5720, Up, MTU 9000
-- `vSwitch0`: stessi 5 port group di Server-2 (Management Network, VM Network, VM Network DMZ, VM Network Internal, VMotion) — configurazione di rete gemella
+- `vSwitch0`: stessi 5 port group di Server-2 (Management Network, VM Network,
+  VM Network DMZ, VM Network Internal, VMotion) — configurazione di rete
+  gemella
+
 
 **Storage locale:**
 - Datastore VMFS-6 locale `datastore (172)`, **291 GB** (molto più
@@ -286,9 +301,11 @@ alternativa (`-i`/`-a`) sono stati respinti dal dispositivo stesso
 riuscita.
 
 **Verifica post-mapping (CMC, read-only):**
-```
+
+```text
 raid get vdisks -o -p name,virtualadapter1accesspolicy,virtualadapter2accesspolicy,virtualadapter3accesspolicy,virtualadapter4accesspolicy
 ```
+
 Entrambe le VD ora riportano `VirtualAdapter2AccessPolicy = Full
 Access` e `VirtualAdapter3AccessPolicy = Full Access` (Server-2 e
 Server-3), mentre VA1 e VA4 restano `No Access` — mapping applicato
@@ -363,6 +380,7 @@ Status: Warning**. Causa individuata e non critica per i dati, vedi
 sotto.
 
 ### Architettura
+
 
 Storage condiviso Dell VRTX su **due controller Shared PERC8**:
 - `RAID.ChassisIntegrated.1-1` — **Status: OK**, PCI slot 9, firmware
