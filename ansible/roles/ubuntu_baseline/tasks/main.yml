@@ -42,6 +42,15 @@
     cache_valid_time: 3600
   become: true
   when: ubuntu_baseline_update_cache | bool
+  # Refreshing a package index is a means, not a piece of desired state:
+  # nothing about the host is different afterwards. Left unmarked, this
+  # task reported "changed" every time the cache passed cache_valid_time
+  # -- which made the idempotence check, and therefore `make smoke-test`
+  # itself, fail once an hour for ever regardless of the host's actual
+  # configuration (2026-09-02, see
+  # docs/logbook/08-ripresa-test-e-verifica-deploy.md). A drift signal
+  # that fires on the clock teaches operators to ignore drift signals.
+  changed_when: false
   tags: [linux, bootstrap]
 
 - name: Install the baseline packages
@@ -116,6 +125,20 @@
   become: true
   tags: [linux, bootstrap]
 
+# The desired state and the record of the last run are two different
+# things, and they are kept in two files because they change on two
+# different schedules.
+#
+# state.json describes WHAT was asked for. It only changes when the
+# configuration changes, so it is idempotent and safe to compare.
+# last-applied.json records WHEN it was last applied, by whom -- values
+# that differ on every single run by construction.
+#
+# They used to be one file. A timestamp inside the desired-state marker
+# made the marker report "changed" on every run for ever, which is
+# precisely the kind of permanent false positive that makes a drift
+# report worthless (2026-09-02, see
+# docs/logbook/08-ripresa-test-e-verifica-deploy.md).
 - name: Record the applied desired state
   ansible.builtin.copy:
     content: "{{ marker | to_nice_json }}\n"
@@ -128,12 +151,27 @@
     marker:
       host: "{{ inventory_hostname }}"
       profile: "{{ forge_host.profile }}"
-      deployment_id: "{{ forge_deployment_id }}"
       git_commit: "{{ forge_git_commit }}"
       git_branch: "{{ forge_git_branch }}"
-      applied_at: "{{ ansible_date_time.iso8601 }}"
+  tags: [linux, bootstrap]
+
+- name: Record when the desired state was last applied
+  ansible.builtin.copy:
+    content: "{{ run | to_nice_json }}\n"
+    dest: /etc/forge-ai/last-applied.json
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    run:
+      deployment_id: "{{ forge_deployment_id }}"
+      applied_at: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
       applied_by: "{{ forge_operator }}"
       trigger: "{{ forge_trigger }}"
+  # This one is expected to change every run: that is its job. Marking
+  # it so keeps it out of the idempotence signal instead of poisoning it.
+  changed_when: false
   tags: [linux, bootstrap]
 
 - name: Install the health check command

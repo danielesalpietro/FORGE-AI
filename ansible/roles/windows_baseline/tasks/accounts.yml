@@ -51,24 +51,47 @@
   failed_when: false
   tags: [windows, security]
 
+# Deny network logon to local accounts that have a blank password. On a
+# workgroup host this is the main lateral-movement control available
+# without a domain.
+#
+# This is a registry value, not a System Access entry: secedit exports it
+# as MACHINE\System\CurrentControlSet\Control\Lsa\LimitBlankPasswordUse
+# under [Registry Values]. Declaring it under System Access made
+# win_security_policy write it somewhere it could never read it back, so
+# the task reported changed on every run and the value's real state was
+# never actually asserted (2026-09-02, see
+# docs/logbook/08-ripresa-test-e-verifica-deploy.md).
+- name: Deny network logon to blank-password local accounts
+  ansible.windows.win_regedit:
+    path: HKLM:\System\CurrentControlSet\Control\Lsa
+    name: LimitBlankPasswordUse
+    data: 1
+    type: dword
+  tags: [windows, security]
+
 - name: Apply the local account policy
   community.windows.win_security_policy:
-    section: "{{ item.section }}"
+    section: System Access
     key: "{{ item.key }}"
     value: "{{ item.value }}"
   loop:
-    # Deny network logon to local accounts that are not the management
-    # account. On a workgroup host this is the main lateral-movement
-    # control available without a domain.
-    - { section: System Access, key: LimitBlankPasswordUse, value: 1 }
-    - { section: System Access, key: MinimumPasswordLength, value: 14 }
-    - { section: System Access, key: PasswordComplexity, value: 1 }
-    - { section: System Access, key: LockoutBadCount, value: 10 }
-    - { section: System Access, key: ResetLockoutCount, value: 15 }
-    - { section: System Access, key: LockoutDuration, value: 15 }
+    - { key: MinimumPasswordLength, value: 14 }
+    - { key: PasswordComplexity, value: 1 }
+    - { key: LockoutBadCount, value: 10 }
+    # LockoutDuration MUST be applied before ResetLockoutCount. Windows
+    # clamps the observation window to the lockout duration in force at
+    # the moment of the write, so setting the window first left it
+    # pinned at the old, lower duration -- the policy then differed from
+    # the one declared here, silently, on every run. Verified on the
+    # target: `net accounts` reported an observation window of 10 while
+    # this file asked for 15.
+    - { key: LockoutDuration, value: 15 }
+    - { key: ResetLockoutCount, value: 15 }
   loop_control:
     label: "{{ item.key }} = {{ item.value }}"
-  failed_when: false
+  # No failed_when: false. It was hiding exactly the divergence above:
+  # a security policy that cannot be applied must be loud, not silent.
   tags: [windows, security]
 
 - name: Check LAPS readiness

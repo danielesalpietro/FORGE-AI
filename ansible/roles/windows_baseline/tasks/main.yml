@@ -45,6 +45,10 @@
     state: directory
   tags: [windows, bootstrap]
 
+# Two files, for the reason documented at the same task in
+# ubuntu_baseline/tasks/main.yml: the desired state changes when the
+# configuration changes, the run record changes every run, and mixing
+# them made the marker permanently non-idempotent.
 - name: Record the applied desired state
   ansible.windows.win_copy:
     content: "{{ marker | to_nice_json }}\n"
@@ -53,12 +57,21 @@
     marker:
       host: "{{ inventory_hostname }}"
       profile: "{{ forge_host.profile }}"
-      deployment_id: "{{ forge_deployment_id }}"
       git_commit: "{{ forge_git_commit }}"
       git_branch: "{{ forge_git_branch }}"
-      applied_at: "{{ ansible_date_time.iso8601 | default('unknown') }}"
+  tags: [windows, bootstrap]
+
+- name: Record when the desired state was last applied
+  ansible.windows.win_copy:
+    content: "{{ run | to_nice_json }}\n"
+    dest: '{{ windows_baseline_state_dir }}\last-applied.json'
+  vars:
+    run:
+      deployment_id: "{{ forge_deployment_id }}"
+      applied_at: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
       applied_by: "{{ forge_operator }}"
       trigger: "{{ forge_trigger }}"
+  changed_when: false
   tags: [windows, bootstrap]
 
 - name: Include the SMB hardening

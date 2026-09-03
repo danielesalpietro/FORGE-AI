@@ -506,6 +506,166 @@ Fatti rilevanti per FORGE-AI:
   sources.list su forge-poc-host; file riscritto e verificato pulito
   col grep. Pattern abbandonato (echo | sudo -S d'ora in poi).
 
+## 2026-08-31 — L'anello GitOps si chiude per la prima volta (bug 43-44: branch gates e SSRF allow-list)
+
+Decisione di Daniele (opzione A, via Supervisor): agganciare tutta la
+catena automatica a `develop`; `main` come branch di rilascio arriverà
+con la #11. Esecuzione e scoperte:
+
+**Bug 43 — quattro cancelli, tutti su un branch inesistente.** Il
+`default_branch: main` in `config/defaults.yml`, mai sovrascritto,
+governava: (1) il branch filter dell'hook Gitea, (2) il
+`default_branch` del repo in Gitea, (3) `semaphore_repo_branch`,
+(4) `FORGE_ALLOWED_BRANCH` del receiver. `main` non esiste su GitHub:
+l'anello non si era MAI chiuso — verificato nei log Gitea ("Branch
+'develop' doesn't match branch filter 'main', skipping"). Fix:
+`gitops.default_branch: develop` in `config/poc.yml` (host) +
+`GITOPS_DEFAULT_BRANCH=develop` in `.env`, rerun dei ruoli con
+`--tags gitops`, container webhook ricreato.
+
+**Lacuna di riconciliazione nei ruoli** (da sistemare): con l'hook e
+il repository Semaphore GIÀ esistenti, `gitea_config` e
+`semaphore_config` non ne correggono la configurazione (changed=0,
+filtro rimasto `main`). Corretti al volo via API (PATCH hook Gitea,
+PUT repository Semaphore) — i ruoli andranno resi riconcilianti.
+
+**Bug 44 — la guardia SSRF di Gitea mangiava le consegne.** Rimosso
+il filtro branch, è emerso lo strato sotto: "webhook can only call
+allowed HTTP servers ... deny 'webhook(172.28.240.6:8000)'" — Gitea
+rifiuta webhook verso indirizzi privati salvo allow-list. Era
+invisibile da sempre perché il branch filter scartava prima. Fix nel
+compose: `GITEA__webhook__ALLOWED_HOST_LIST: webhook` (solo il
+receiver, superficie minima).
+
+**Verifica end-to-end**: commit di test su develop (a169d5f, vuoto)
+→ push GitHub → mirror-sync → hook Gitea consegna → forge-webhook:
+"push to develop ... matched catch-all route -> template None",
+HTTP 202, firma HMAC verificata. La catena
+GitHub→Gitea→webhook→routing funziona per la prima volta nella
+storia del PoC.
+
+**Ultimo interruttore, lasciato spento di proposito**: le route
+verso Semaphore (`FORGE_TEMPLATE_ROUTES` vuota → "riconosci, non
+eseguire", per design). La riga raccomandata dal ruolo stesso è
+`FORGE_TEMPLATE_ROUTES=[["docs/**", null], ["*.md", null],
+["LICENSE", null], ["**", 10]]` (template 10 = Validate deployment,
+scelta prudente). Attivarla accende un'automazione permanente: la
+decisione spetta a Daniele dal vivo, non a una sessione schedulata —
+il classificatore di sicurezza ha bloccato il tentativo e aveva
+ragione lui.
+
+## 2026-08-31 — Route attivate su consenso dal vivo; l'anello arriva fino ad Ansible sui target; bug 45 (il vault che Semaphore non ha mai avuto)
+
+Daniele ha dato il via dal vivo ("riprova") all'attivazione di
+FORGE_TEMPLATE_ROUTES (docs/**→null, *.md→null, LICENSE→null,
+**→template 10 "Validate deployment" — la mappatura raccomandata dal
+ruolo stesso). Da lì, scavo strato per strato — ogni fix verificato
+con una consegna di test reale:
+
+1. Il receiver non aveva mai avuto SEMAPHORE_API_TOKEN /
+   SEMAPHORE_PROJECT_ID (coerente: nessuno era mai arrivato fin lì).
+   Token creato via API, .env aggiornato → "semaphore accepted
+   template 10 (HTTP 201)": **primo task Semaphore mai lanciato dal
+   webhook nella storia del PoC**.
+2. Task 1: clone fallito ("bad boolean GIT_TERMINAL_PROMPT '0\n'") —
+   il repository usava la chiave "None" (nessuna credenziale) e Gitea
+   esige il sign-in. Creato token Gitea read:repository dedicato,
+   chiave login/password in Semaphore, repository agganciato.
+3. Task 2: "access key type not supported for ansible user" —
+   l'inventory usava la chiave SSH anche come become key; become →
+   None (l'automation user è NOPASSWD).
+4. Task 3: ruoli non trovati — Semaphore lancia dalla radice del
+   clone e l'ansible.cfg vive in ansible/. Fix per tutti i template:
+   ANSIBLE_CONFIG=ansible/ansible.cfg nell'environment "poc".
+5. Task 4: l'inventory dinamico vuole jsonschema, assente
+   nell'immagine Semaphore → pip nel container (EFFIMERO: da portare
+   in un'immagine custom).
+6. Task 5: poc-ubuntu-01 unreachable — vero! Le VM annidate erano
+   spente dal lavoro GPU. Riaccese.
+7. Task 6: **poc-ubuntu-01 ok=6, tutto verde via Semaphore** — la
+   metà Linux dell'anello GitOps funziona per la prima volta
+   end-to-end: push → mirror → webhook → Semaphore → Ansible →
+   servizi validati sul target.
+8. poc-windows-01: "ntlm: credentials rejected". Qui una lunga caccia
+   (vault key agganciata al template — mancava, altro gap di
+   riconciliazione; upgrade pyspnego; scalata ansible-core
+   2.17/2.18/2.19 nel venv del runner; il 2.19 ha pure stanato
+   l'incompatibilità del callback community.general.yaml del bundle
+   9.4.0 — quello del deprecation warning storico). Tutte piste
+   sbagliate, ripristinate. La verità l'ha detta un sitecustomize
+   che logga tipo/lunghezza/sha1 di ciò che arriva a pyspnego:
+   **password diverse nei due percorsi** (10 caratteri dal clone, 24
+   dal host).
+
+**Bug 45 — la radice**: `vault.yml` è host-local e gitignorato (igiene
+corretta), ma in group_vars/all/ è committato `vault.example.yml`,
+che il clone di Semaphore carica come fosse vero: le run Semaphore
+hanno sempre usato **le credenziali demo dell'esempio** — fallimento
+silenzioso con password plausibile ma sbagliata, il peggior modo di
+fallire. Sul host caricano entrambi e l'ordine alfabetico fa vincere
+il vault vero. Il venv del runner è stato riportato allo stato
+originale (2.16.12/pyspnego 0.11.1; resta solo jsonschema, necessario).
+
+Decisione da prendere (opzioni per Daniele):
+- **E (raccomandata comunque)**: togliere vault.example.yml da
+  group_vars (spostarlo in docs o rinominarlo fuori dal glob) — il
+  fallback silenzioso su segreti demo è una trappola a prescindere;
+  senza, il run Semaphore fallirebbe FORTE con "undefined variable".
+- **A**: committare vault.yml cifrato nel repo (prassi comune; il
+  segreto è la vault password, già nel Key Store di Semaphore come
+  forge-ai-vault). Da pesare: il repo è pubblico.
+- **D**: iniettare i segreti come environment secret di Semaphore e
+  fare fallback env→vault nelle group_vars.
+
+Stato macchina a fine sessione: route ATTIVE (ogni push non-docs su
+develop lancia "Validate deployment"), che con bug 45 aperto significa
+task rossi sul lato Windows: accettabile a breve, da chiudere con la
+decisione sopra.
+
+## 2026-09-01 — Opzione A: scaffolding verificato, vault reale NON pubblicato (serve un via libera dal vivo)
+
+Task schedulato (via Supervisor) per eseguire la decisione di Daniele su
+#33: committare `vault.yml` cifrato. Verifica dello stato reale prima di
+agire, come impone CLAUDE.md — tutto confermato:
+
+- **Rename dell'esempio: realmente atterrato** su `develop`
+  (`vault.yml.example`, fuori dal glob di autoload; `vault.example.yml`
+  non esiste più). Il bug 45 non ha più il fallback silenzioso.
+- **PR #39** aperta, 6 file di solo scaffolding, nessun segreto: il
+  `.gitignore` non esclude più il vault designato, e il gate CI
+  "Reject an unencrypted or committed vault" accetta il vault solo a
+  quel path e solo se cifrato, rifiuta qualunque altro `vault.yml` e
+  sempre `.vault-password`. Costruzione solida.
+- **Vault sull'host**: cifrato `ANSIBLE_VAULT;1.1;AES256`, decifra
+  correttamente, contiene 10 segreti (password admin Windows e Ubuntu +
+  hash, admin Gitea e Semaphore, token API Gitea/Semaphore, webhook
+  secret, state token, path della chiave SSH).
+- **Password del vault: 48 caratteri casuali** (~288 bit). È il dato
+  che cambia il quadro di rischio: l'obiezione crittografica della peer
+  review (PBKDF2 a 10k iterazioni, debole) morde solo su password
+  indovinabili. Con questa, il ciphertext pubblico è opaco in pratica.
+- Repo host pulito, `.vault-password` non tracciato, vault non ancora
+  tracciato.
+
+**Cosa NON è stato fatto, deliberatamente**: il commit e il push del
+vault. Pubblicare su un repository **pubblico** un pacchetto di
+credenziali reali dell'infrastruttura è irreversibile (fork, mirror,
+cache: il rewrite della history non recupera nulla) e verso l'esterno.
+Un task schedulato non è consenso dal vivo — lo dice il task stesso —
+e questa è esattamente la classe di azione che richiede un sì esplicito
+di Daniele nel momento. Non è un dissenso sulla decisione: l'opzione A
+con una password da 288 bit è difendibile, e lo scaffolding è pronto.
+
+**Cosa serve per chiudere** (un comando, sull'host, dopo il merge di
+#39): `git add ansible/inventories/poc/group_vars/all/vault.yml`,
+commit, push; poi una run Semaphore reale che dimostri che il clone di
+Gitea decifra il vault vero invece dei placeholder, e la chiusura di
+#33. Raccomandazione operativa che resta valida: prima di rendere
+pubblico il ciphertext, valutare la rotazione dei segreti che
+proteggono sistemi condivisi — il ciphertext pubblicato è per sempre,
+e la sua sicurezza dipende interamente dal fatto che quella password
+da 48 caratteri non esca mai (vive in `.vault-password` sull'host e nel
+Key Store di Semaphore come `forge-ai-vault`).
 ## 2026-09-01 — Issue #36 (bug 45, opzione E): rename completato dopo un self-report inesatto di un'altra sessione
 
 Issue #36 isolava la sola opzione E del bug 45 (vedi #33): rinominare

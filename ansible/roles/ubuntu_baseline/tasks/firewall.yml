@@ -63,6 +63,12 @@
   ansible.builtin.command: ufw status verbose
   become: true
   changed_when: false
+  # See the same note on "Read the effective sshd configuration" in
+  # ssh.yml: a read-only probe feeding a hard assert must also run in
+  # check mode, or the assert fails on a correctly configured host and
+  # takes the whole check-mode run down with it. windows_baseline
+  # already does this on its own probes; ubuntu_baseline did not.
+  check_mode: false
   register: forge_ufw_status
   tags: [linux, security, validation]
 

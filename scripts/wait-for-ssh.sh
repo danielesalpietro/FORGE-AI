@@ -110,7 +110,11 @@ readonly -a SSH_OPTIONS=(
 
 attempt() {
     local output
-    if output=$(ssh "${SSH_OPTIONS[@]}" -i "$SSH_KEY" \
+    # -n: the remote command reads no input, and this function is called
+    # from a polling loop that must not have its stdin consumed. Not a
+    # live bug here, but the same omission cost smoke-test.sh half its
+    # fleet -- see tests/bats/test_scripts_interface.bats.
+    if output=$(ssh -n "${SSH_OPTIONS[@]}" -i "$SSH_KEY" \
                     "${SSH_USER}@${ADDRESS}" 'hostname; id -un' 2>&1); then
         printf '%s' "$output"
         return 0

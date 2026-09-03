@@ -34,7 +34,7 @@
     }
     if ($changed) { Write-Output 'changed' } else { Write-Output 'unchanged' }
   register: forge_win_fw_defaults
-  changed_when: forge_win_fw_defaults.stdout is search('changed')
+  changed_when: forge_win_fw_defaults.stdout | trim == 'changed'
   check_mode: false
   tags: [windows, security]
 

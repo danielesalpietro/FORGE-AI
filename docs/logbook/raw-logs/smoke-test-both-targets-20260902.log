@@ -1,0 +1,103 @@
+[warn] WinRM certificate validation: DISABLED (security.winrm_cert_validation=ignore)
+       the PoC certificate is self-signed by Configure-WinRM.ps1;
+       set winrm_cert_validation: validate once a trusted certificate is enrolled
+  ______ ____  _____   _____ ______        _____
+ |  ____/ __ \|  __ \ / ____|  ____|      /  _  \_ _
+ | |__ | |  | | |__) | |  __| |__   ___  |  /_\  | |
+ |  __|| |  | |  _  /| | |_ |  __| |___| |  _  | | |
+ | |   | |__| | | \ \| |__| | |____      | | | | | |
+ |_|    \____/|_|  \_\\_____|______|     |_| |_|_|_|
+
+ GitOps infrastructure provisioning -- Proof of Concept
+
+
+==> Smoke test
+
+==> Ubuntu target: poc-ubuntu-01 (192.168.250.21)
+[ ok ] poc-ubuntu-01    vm-running                 running
+[ ok ] poc-ubuntu-01    ip-responds                192.168.250.21 answers ICMP
+[ ok ] poc-ubuntu-01    lifecycle-state            ready after 2 install attempt(s)
+[ ok ] poc-ubuntu-01    ssh-login                  key authentication succeeded as forgeops
+[ ok ] poc-ubuntu-01    hostname                   poc-ubuntu-01
+[ ok ] poc-ubuntu-01    qemu-guest-agent           active
+[ ok ] poc-ubuntu-01    automation-user            forgeops exists (groups: forgeops adm cdrom sudo dip plugdev lxd)
+[ ok ] poc-ubuntu-01    ssh-root-login             permitrootlogin no
+[ ok ] poc-ubuntu-01    ssh-password-auth          passwordauthentication no
+[ ok ] poc-ubuntu-01    firewall                   Status: active
+[ ok ] poc-ubuntu-01    forge-health               ok
+
+==> Windows target: poc-windows-01 (192.168.250.22)
+[ ok ] poc-windows-01   vm-running                 running
+[ ok ] poc-windows-01   ip-responds                192.168.250.22 answers ICMP
+[ ok ] poc-windows-01   lifecycle-state            configuring after 1 install attempt(s)
+[ ok ] poc-windows-01   winrm-https                WS-Man listener answered HTTP 401 on 5986
+[ ok ] poc-windows-01   winrm-certificate          subject=CN = poc-windows-01
+[ ok ] poc-windows-01   winrm-auth                 win_ping succeeded
+[ ok ] poc-windows-01   hostname                   POC-WINDOWS-01
+[ ok ] poc-windows-01   smbv1-disabled             EnableSMB1Protocol=False
+[ ok ] poc-windows-01   firewall-enabled           Public profile Enabled=True
+[ ok ] poc-windows-01   windows-edition            Microsoft Windows Server 2025 Standard Evaluation
+       configured: Windows Server 2025 SERVERSTANDARD
+
+==> Idempotence: applying the baseline a second time, in check mode
+       an idempotent configuration changes nothing on the second run
+[ ok ] poc-ubuntu-01    idempotence                0 task(s) would still change
+[FAIL] poc-windows-01   idempotence                13 task(s) would still change
+       the tasks that would change, from --diff:
+       +}
+       
+       changed: [poc-windows-01]
+       
+       TASK [windows_baseline : Include the SMB hardening] ****************************
+       Wednesday 02 September 2026  19:01:40 +0000 (0:00:05.928)       0:01:18.063 *** 
+       included: /home/dsalpietro/FORGE-AI/ansible/roles/windows_baseline/tasks/smb.yml for poc-windows-01
+       
+       TASK [windows_baseline : Disable the SMBv1 server protocol] ********************
+       Wednesday 02 September 2026  19:01:40 +0000 (0:00:00.087)       0:01:18.151 *** 
+       changed: [poc-windows-01]
+       
+       TASK [windows_baseline : Remove the SMBv1 client feature] **********************
+       Wednesday 02 September 2026  19:01:48 +0000 (0:00:07.505)       0:01:25.656 *** 
+       ok: [poc-windows-01]
+       
+       TASK [windows_baseline : Require SMB signing on the server] ********************
+       Wednesday 02 September 2026  19:01:55 +0000 (0:00:07.534)       0:01:33.190 *** 
+       changed: [poc-windows-01]
+       
+       TASK [windows_baseline : Verify SMBv1 is off] **********************************
+       Wednesday 02 September 2026  19:02:02 +0000 (0:00:06.692)       0:01:39.883 *** 
+       ok: [poc-windows-01]
+       
+       TASK [windows_baseline : Assert SMBv1 is disabled] *****************************
+       Wednesday 02 September 2026  19:02:08 +0000 (0:00:06.447)       0:01:46.330 *** 
+       ok: [poc-windows-01] => changed=false 
+       --
+       TASK [windows_baseline : Set the default inbound and outbound actions] *********
+       Wednesday 02 September 2026  19:02:14 +0000 (0:00:05.551)       0:01:52.049 *** 
+       changed: [poc-windows-01]
+       
+       TASK [windows_baseline : Scope the WinRM HTTPS rule to the management networks] ***
+       Wednesday 02 September 2026  19:02:22 +0000 (0:00:07.717)       0:01:59.766 *** 
+       +[FORGE-AI-WinRM-HTTPS-In]
+       +Description='Ansible/Semaphore management access (FORGE-AI managed state)'
+       +Direction='1'
+       +Action='1'
+       +ApplicationName=''
+       --
+       
+       Some of this may be expected: see docs/OPERATIONS.md, 'check-mode limitations'.
+       A task that reports changed on every run makes the drift report useless.
+
+================================================================
+ SMOKE TEST FAILED -- 22 passed, 1 failed
+================================================================
+
+================================================================
+ FORGE-AI: smoke-test.sh failed
+================================================================
+  exit code : 1
+  line      : 451
+  command   : [[ $FAILED -eq 0 ]]
+  call stack:
+    main() at smoke-test.sh:454
+

@@ -55,6 +55,14 @@
   ansible.builtin.command: sshd -T
   become: true
   changed_when: false
+  # check_mode: false because this reads and changes nothing, and the
+  # assertion below has no other source of truth. Without it, check-mode
+  # runs skip this task, the assertion evaluates an empty stdout and
+  # fails on a correctly hardened host -- which aborted the whole
+  # check-mode run of configure-targets.yml before the Windows play,
+  # leaving Windows idempotence permanently unmeasured (2026-09-02, see
+  # docs/logbook/08-ripresa-test-e-verifica-deploy.md).
+  check_mode: false
   register: forge_sshd_effective
   tags: [linux, security, validation]
 

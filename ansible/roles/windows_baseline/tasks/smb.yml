@@ -19,7 +19,14 @@
       Write-Output 'unchanged'
     }
   register: forge_smb1_server
-  changed_when: forge_smb1_server.stdout is search('changed')
+  # An equality test, not `is search('changed')`: "unchanged" contains
+  # "changed" as a substring, so the regex form matched its own negative
+  # and this task reported changed on every single run, for ever,
+  # whether or not it had done anything. Three tasks in this role had
+  # it; it made the Windows drift signal meaningless and went unnoticed
+  # because the check-mode run never reached the Windows play at all
+  # (2026-09-02, see docs/logbook/08-ripresa-test-e-verifica-deploy.md).
+  changed_when: forge_smb1_server.stdout | trim == 'changed'
   check_mode: false
   tags: [windows, security]
 
@@ -42,7 +49,7 @@
       Write-Output 'unchanged'
     }
   register: forge_smb_signing
-  changed_when: forge_smb_signing.stdout is search('changed')
+  changed_when: forge_smb_signing.stdout | trim == 'changed'
   check_mode: false
   tags: [windows, security]
 

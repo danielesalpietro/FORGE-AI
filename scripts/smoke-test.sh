@@ -12,9 +12,14 @@
 # Ubuntu:  VM running, IP responds, SSH works, hostname correct,
 #          qemu-guest-agent active, automation user exists, baseline
 #          idempotent.
-# Windows: VM running, IP responds, WinRM HTTPS works, hostname correct,
-#          expected edition, firewall applied, SMBv1 disabled, baseline
-#          idempotent.
+# Windows: VM running, IP responds, WinRM listener answers, WinRM
+#          authenticates, hostname correct, expected edition, firewall
+#          applied, SMBv1 disabled, baseline idempotent.
+#
+# The WinRM listener and WinRM authentication are two separate checks on
+# purpose: "nothing is listening" and "the password is wrong" have
+# different causes and different fixes, and collapsing them into one
+# verdict is what made bug 45 take a session to find.
 #
 # Exit codes: 0 all passed, 1 at least one failed, 2 usage error
 # =====================================================================
@@ -108,7 +113,14 @@ test_lifecycle_state() {
 # --- Ubuntu -----------------------------------------------------------
 ssh_run() {
     local address=$1; shift
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    # -n is load-bearing, not decoration. main() iterates the host list
+    # with `while read` fed by a process substitution, so stdin belongs
+    # to that list. Without -n, ssh reads it to EOF on the first call
+    # and every host after the first silently disappears from the run --
+    # the script then reports a verdict over part of the fleet without
+    # saying so (observed live 2026-09-02: poc-windows-01 was never
+    # tested, see docs/logbook/08-ripresa-test-e-verifica-deploy.md).
+    ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=10 -o LogLevel=ERROR \
         -i "$SSH_KEY" "${SSH_USER}@${address}" "$@" 2>/dev/null
 }
@@ -166,30 +178,81 @@ test_ubuntu() {
 }
 
 # --- Windows ----------------------------------------------------------
+# Returns the HTTP status the WS-Man endpoint answers with, or 000 when
+# nothing answers at all.
+#
+# This deliberately does NOT parse an Identify response. A correctly
+# configured WinRM listener requires authentication even for Identify
+# and answers 401 to an anonymous probe -- so the previous version of
+# this check, which looked for IdentifyResponse in the body, failed
+# permanently against a healthy host and then returned early, skipping
+# every Windows check behind it (observed live 2026-09-02, see
+# docs/logbook/08-ripresa-test-e-verifica-deploy.md).
+#
+# What a status code proves is the useful half: something is listening
+# and speaking HTTP over TLS on the WinRM port. Whether the credentials
+# work is a separate question, answered by winrm_auth_ok below -- and
+# keeping the two apart is what tells "listener down" apart from
+# "wrong password", a distinction bug 45 spent a whole session blurring.
+#
+# CURL_TLS_OPTIONS is derived from security.winrm_cert_validation in
+# config/poc.yml, and main() reports which way it resolved. The PoC
+# default is "ignore" because the WinRM certificate is generated
+# self-signed during the Windows specialize phase; setting
+# winrm_cert_validation: validate makes this probe strict, which is
+# what it should be once a CA-issued certificate is enrolled.
+# See docs/SECURITY.md.
 winrm_probe() {
     local address=$1 port=$2
-    # CURL_TLS_OPTIONS is derived from security.winrm_cert_validation in
-    # config/poc.yml, and main() reports which way it resolved. The PoC
-    # default is "ignore" because the WinRM certificate is generated
-    # self-signed during the Windows specialize phase; setting
-    # winrm_cert_validation: validate makes this probe strict, which is
-    # what it should be once a CA-issued certificate is enrolled.
-    # See docs/SECURITY.md.
-    curl --silent "${CURL_TLS_OPTIONS[@]}" --max-time 15 -X POST \
+    curl --silent --output /dev/null --write-out '%{http_code}' \
+        "${CURL_TLS_OPTIONS[@]}" --max-time 15 -X POST \
         -H 'Content-Type: application/soap+xml;charset=UTF-8' \
         --data-binary '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:wsmid="http://schemas.dmtf.org/wbem/wsman/identity/1/wsmanidentity.xsd"><s:Header/><s:Body><wsmid:Identify/></s:Body></s:Envelope>' \
-        "https://${address}:${port}/wsman" 2>/dev/null
+        "https://${address}:${port}/wsman" 2>/dev/null || printf '000'
+}
+
+# The authenticated half: does WinRM accept the credentials we hold?
+winrm_auth_ok() {
+    local host=$1
+    [[ -n "$FORGE_ANSIBLE" ]] || return 2
+    ( cd "$FORGE_ROOT/ansible" && \
+      "$FORGE_ANSIBLE" "$host" -m ansible.windows.win_ping \
+        ${VAULT_ARGUMENT:+--vault-password-file "$FORGE_ROOT/.vault-password"} \
+        >/dev/null 2>&1 )
 }
 
 # Windows checks that need to run a command go through Ansible: there is
 # no ssh equivalent, and reimplementing WinRM authentication in bash
 # would be a worse idea than depending on the tool that already does it.
+#
+# Returns the command's own stdout, and nothing else.
+#
+# ANSIBLE_STDOUT_CALLBACK=minimal is not a preference, it is the whole
+# point: ansible.cfg sets stdout_callback=yaml with
+# bin_ansible_callbacks=True, and the yaml callback prints "changed:
+# [host]" for win_shell without ever showing the command's output. This
+# function used to scrape a JSON '"stdout":' key that that callback
+# never emits, so every in-guest Windows check read back an empty string
+# and reported "<no output>". It went unnoticed because the broken WinRM
+# probe returned before any of them ran: fixing that one uncovered this
+# one (2026-09-02).
 windows_shell() {
     local host=$1 command=$2
-    ( cd "$FORGE_ROOT/ansible" && \
-      ansible "$host" -m ansible.windows.win_shell -a "$command" \
-        ${VAULT_ARGUMENT:+--vault-password-file "$FORGE_ROOT/.vault-password"} 2>/dev/null \
-      | sed -n '/^[[:space:]]*"stdout":/,$p' ) || return 1
+    [[ -n "$FORGE_ANSIBLE" ]] || return 1
+    local raw
+    raw=$( cd "$FORGE_ROOT/ansible" && \
+           ANSIBLE_STDOUT_CALLBACK=minimal "$FORGE_ANSIBLE" "$host" \
+             -m ansible.windows.win_shell -a "$command" \
+             ${VAULT_ARGUMENT:+--vault-password-file "$FORGE_ROOT/.vault-password"} \
+             2>/dev/null ) || return 1
+    # minimal prints "<host> | CHANGED | rc=0 >>" and then the output.
+    # What precedes the banner is callback noise (profile_tasks
+    # timestamps); what follows the first blank line is the recap.
+    printf '%s\n' "$raw" \
+        | sed -n '/| \(CHANGED\|SUCCESS\) | rc=0 >>/,$p' \
+        | sed '1d' \
+        | sed '/^[[:space:]]*$/,$d' \
+        | tr -d '\r'
 }
 
 test_windows() {
@@ -202,17 +265,24 @@ test_windows() {
     test_address_responds "$host" "$address"
     test_lifecycle_state "$host" "$mac"
 
-    local identify
-    identify=$(winrm_probe "$address" "$port")
-    if printf '%s' "$identify" | grep -qi 'ProductVendor\|IdentifyResponse'; then
-        local version
-        version=$(printf '%s' "$identify" | grep -o '<wsmid:ProductVersion>[^<]*' | cut -d'>' -f2 || true)
-        check "$host" "winrm-https" "WS-Man answered on ${port} (${version:-no version})" true
-    else
-        check "$host" "winrm-https" "no WS-Man response on https://${address}:${port}/wsman" false
-        log_dim "the remaining Windows checks need WinRM; skipping them"
-        return
-    fi
+    # Two questions, asked separately, because the answers have
+    # different causes and different fixes.
+    local status; status=$(winrm_probe "$address" "$port")
+    case "$status" in
+        000)
+            check "$host" "winrm-https" \
+                "nothing answered on https://${address}:${port}/wsman" false
+            log_dim "the remaining Windows checks need WinRM; skipping them"
+            return
+            ;;
+        *)
+            # 401 is the expected answer to an anonymous WS-Man request
+            # against a listener that requires authentication, and is
+            # therefore a pass, not a failure.
+            check "$host" "winrm-https" \
+                "WS-Man listener answered HTTP ${status} on ${port}" true
+            ;;
+    esac
 
     # Prove the certificate is what Configure-WinRM.ps1 was asked to make.
     local subject
@@ -221,33 +291,42 @@ test_windows() {
     check "$host" "winrm-certificate" "${subject:-could not read the certificate}" \
         "$([[ "$subject" == *"$host"* ]] && echo true || echo false)"
 
-    if ! command -v ansible >/dev/null 2>&1; then
+    if [[ -z "$FORGE_ANSIBLE" ]]; then
         log_warn "ansible is not available; the in-guest Windows checks are skipped"
         log_dim "install it with ./bootstrap/prepare-host.sh to run them"
         return
     fi
 
-    local output
+    # The authenticated check. Everything below runs commands in the
+    # guest, so a credential failure here explains all of them at once
+    # instead of scattering the same root cause over four checks.
+    if winrm_auth_ok "$host"; then
+        check "$host" "winrm-auth" "win_ping succeeded" true
+    else
+        check "$host" "winrm-auth" \
+            "WinRM rejected the credentials (win_ping failed)" false
+        log_dim "the listener is up but will not authenticate us"
+        log_dim "check vault_windows_admin_password reaches this run"
+        return
+    fi
+
+    local observed
     # SC2016: $env:COMPUTERNAME is PowerShell, evaluated on the Windows
     # target. Single quotes are exactly right -- bash must not touch it.
     # shellcheck disable=SC2016
-    output=$(windows_shell "$host" '$env:COMPUTERNAME' || echo "")
-    local observed; observed=$(printf '%s' "$output" | grep -o '"stdout": "[^"]*' | cut -d'"' -f4 | tr -d '\\r\\n' || true)
+    observed=$(windows_shell "$host" '$env:COMPUTERNAME' | tr -d ' ' || echo "")
     check "$host" "hostname" "${observed:-<no output>}" \
         "$([[ "${observed^^}" == "${host^^}"* ]] && echo true || echo false)"
 
-    output=$(windows_shell "$host" '(Get-SmbServerConfiguration).EnableSMB1Protocol' || echo "")
-    observed=$(printf '%s' "$output" | grep -o '"stdout": "[^"]*' | cut -d'"' -f4 | tr -d '\\r\\n' | tr -d ' ' || true)
+    observed=$(windows_shell "$host" '(Get-SmbServerConfiguration).EnableSMB1Protocol' | tr -d ' ' || echo "")
     check "$host" "smbv1-disabled" "EnableSMB1Protocol=${observed:-unknown}" \
         "$([[ "${observed,,}" == "false" ]] && echo true || echo false)"
 
-    output=$(windows_shell "$host" '(Get-NetFirewallProfile -Name Public).Enabled' || echo "")
-    observed=$(printf '%s' "$output" | grep -o '"stdout": "[^"]*' | cut -d'"' -f4 | tr -d '\\r\\n' | tr -d ' ' || true)
+    observed=$(windows_shell "$host" '(Get-NetFirewallProfile -Name Public).Enabled' | tr -d ' ' || echo "")
     check "$host" "firewall-enabled" "Public profile Enabled=${observed:-unknown}" \
         "$([[ "${observed,,}" == "true" ]] && echo true || echo false)"
 
-    output=$(windows_shell "$host" '(Get-CimInstance Win32_OperatingSystem).Caption' || echo "")
-    observed=$(printf '%s' "$output" | grep -o '"stdout": "[^"]*' | cut -d'"' -f4 | tr -d '\\r\\n' || true)
+    observed=$(windows_shell "$host" '(Get-CimInstance Win32_OperatingSystem).Caption' || echo "")
     local expected_edition; expected_edition=$(forge_config '.media.windows.image_name')
     check "$host" "windows-edition" "${observed:-<no output>}" \
         "$([[ -n "$observed" ]] && echo true || echo false)"
@@ -281,7 +360,13 @@ test_idempotence() {
 
     if [[ $changed_total -gt 0 ]]; then
         log_dim "the tasks that would change, from --diff:"
-        printf '%s' "$output" | grep -B2 -A8 'changed:' | head -40 | sed 's/^/       /' >&2
+        # sed -n '1,40p' rather than head -40: head closes the pipe as
+        # soon as it has its 40 lines, grep takes SIGPIPE, and under
+        # `set -o pipefail` that becomes exit 141 for the whole script.
+        # The script then reported 141 instead of 1 on a real drift
+        # finding -- invisible until the Windows play started reaching
+        # this branch at all (2026-09-02).
+        printf '%s' "$output" | grep -B2 -A8 'changed:' | sed -n '1,40p' | sed 's/^/       /' >&2
         log_dim ""
         log_dim "Some of this may be expected: see docs/OPERATIONS.md, 'check-mode limitations'."
         log_dim "A task that reports changed on every run makes the drift report useless."
